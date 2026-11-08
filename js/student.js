@@ -537,6 +537,15 @@ function meView() {
     ${S.diary.filter((d) => d.day !== today).length ? html`<h3 class="mt2">Прошлые записи</h3><div class="list">${S.diary.filter((d) => d.day !== today).slice(0, 30).map((d) => html`<div class="item"><div class="tiny muted">${fmtDate(d.day)}</div><div style="white-space:pre-wrap">${d.body}</div></div>`)}</div>` : ""}
   </div>
 
+  ${S.demo ? "" : html`<div class="card"><h3>Сменить пароль</h3>
+    <form data-form="chpw"><label>Текущий пароль</label><input type="password" name="old" required autocomplete="current-password">
+      <label>Новый пароль (минимум 6 символов)</label><input type="password" name="n1" required minlength="6" autocomplete="new-password">
+      <label>Повторите новый пароль</label><input type="password" name="n2" required minlength="6" autocomplete="new-password">
+      <button class="btn block mt">Сменить пароль</button></form>
+    <p class="hint">Вход на других устройствах сохранится: заходите с кодом и новым паролем.</p></div>`}
+  ${isTeacher() && !S.demo ? html`<div class="card"><h3>Как это видят ученики</h3>
+    <p class="small muted">Откроется демо-версия с вымышленными данными — ваши настоящие данные не изменятся.</p>
+    <button class="btn soft block" data-act="previewStudent">👁 Посмотреть глазами ученика</button></div>` : ""}
   <div class="card"><h3>Приложение на главный экран</h3>
     <p class="small"><b>iPhone (Safari):</b> кнопка «Поделиться» → «На экран “Домой”».<br><b>Android (Chrome):</b> меню ⋮ → «Установить приложение» / «Добавить на главный экран».</p></div>
   <button class="btn ghost block" data-act="logout">Выйти</button>`;
@@ -548,5 +557,10 @@ FORM.diary = async (f, fd) => {
   if (i >= 0) S.diary[i] = row; else S.diary.unshift(row);
   const g = await award("diary", day, 2);
   toast(g ? `Сохранено · +${g}` : "Сохранено", "ok"); render();
+};
+FORM.chpw = async (f, fd) => {
+  if (fd.get("n1") !== fd.get("n2")) throw new Error("Новые пароли не совпадают");
+  await q(S.sb.auth.changePassword(fd.get("old"), fd.get("n1")));
+  f.reset(); toast("Пароль изменён", "ok");
 };
 ACT.logout = () => doLogout();

@@ -46,7 +46,7 @@ const SCHEMA = {
   attendance:       { cols: T_('lesson_id,user_id,present:b'), pk: ['lesson_id', 'user_id'] },
 };
 const HIDDEN = { profiles: ['salt', 'hash', 'pwv'] };
-const WRITE_RPC = ['touch', 'award', 'teacher_award', 'reset_password', 'upload_slide'];
+const WRITE_RPC = ['touch', 'award', 'teacher_award', 'reset_password', 'upload_slide', 'change_password'];
 const NAME_RE = /^[\p{L}][\p{L}'’\-]+$/u;
 
 // ---------------------------------------------------------------- утилиты
@@ -494,6 +494,15 @@ function rpcCall_(db, ctx, name, a) {
       db.t('attempts').rows.forEach((x) => { const k = x.user_id + x.lesson_id, o = m[k] || (m[k] = { user_id: x.user_id, lesson_id: x.lesson_id, best: 0, total: 0, tries: 0 }); o.best = Math.max(o.best, x.score); o.total = Math.max(o.total, x.total); o.tries++; });
       return ok_(Object.keys(m).map((k) => m[k]));
     }
+    case 'change_password': {
+      must_(uid, 'unauthorized');
+      const me = db.t('profiles').rows.find((r) => r.uid === uid);
+      must_(me && me.hash && hashPw_(String(a.p_old || ''), me.salt) === me.hash, 'Текущий пароль указан неверно');
+      const pw = String(a.p_new || '');
+      must_(pw.length >= 6 && pw.length <= 100, 'Пароль: от 6 до 100 символов');
+      me.salt = uuid_(); me.hash = hashPw_(pw, me.salt); me.pwv = (me.pwv || 0) + 1; db.t('profiles').touch(me);
+      return ok_({ token: makeToken_(me) });
+    }
     case 'reset_password': {
       needT();
       const p = db.t('profiles').rows.find((r) => r.uid === a.p_uid);
@@ -575,6 +584,14 @@ function setup() {
   const msg = 'Готово! Код учителя для регистрации: ' + t.code + ' (он же виден на листе profiles).';
   Logger.log(msg); ss.toast(msg, 'Лемалар', 30);
   return msg;
+}
+/** Аварийно: забыли пароль учителя. Запустите эту функцию в редакторе, затем на сайте откройте «Регистрация», введите код учителя и задайте новый пароль. */
+function resetTeacherPassword() {
+  const db = new DB_(), t = db.t('profiles').rows.find((r) => r.role === 'teacher');
+  must_(t, 'Учитель не найден — сначала запустите setup()');
+  t.auth_id = null; t.salt = null; t.hash = null; t.pwv = (t.pwv || 0) + 1; db.t('profiles').touch(t); db.commit();
+  const msg = 'Пароль учителя сброшен. На сайте: «Регистрация» → код ' + t.code + ' → новый пароль.';
+  Logger.log(msg); return msg;
 }
 function randomCode_(n) {
   const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; let s = '';

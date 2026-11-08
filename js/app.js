@@ -35,15 +35,19 @@ function authView() {
           <button class="btn block mt">Создать аккаунт</button>
           <button type="button" class="btn ghost block mt" data-act="authBack">← Назад</button></form>`}
     </div>
-    ${demo ? html`<div class="card gold"><b>Демо-режим</b><p class="small">Сервер пока не подключён — данные сохраняются только на этом устройстве. Войти как:</p>
-      <div class="row wrap"><button class="btn sm" data-act="demoLogin" data-code="TEACHER01">Учитель</button><button class="btn sm soft" data-act="demoLogin" data-code="AIGERIM1">Ученица (Айгерим)</button><button class="btn sm soft" data-act="demoLogin" data-code="DANIYAR2">Ученик (Данияр)</button></div>
-      <p class="hint">Новую регистрацию можно проверить кодами: ZHANSAYA уже занят, а ERLAN333, MADINA44, TEMIRLAN — свободны (пароль придумайте любой).</p></div>` : ""}
+    ${demo ? html`<div class="card gold"><b>Сервер не подключён</b><p class="small">В файле config.js не указан адрес Google Apps Script (API_URL). Вход станет доступен после подключения.</p></div>` : ""}
   </div>`;
 }
 ACT.authMode = (el) => { auth = { mode: el.dataset.m, step: 1, code: "", info: null }; render(); };
 ACT.authBack = () => { auth.step = 1; render(); };
-ACT.demoLogin = async (el) => { await doLogin(el.dataset.code, "demo123"); go(); };
-ACT.resetDemo = () => { if (confirm("Сбросить демо-данные к исходным?")) { S.sb.resetDemo(); location.hash = ""; location.reload(); } };
+// Предпросмотр «как видят ученики» — только из аккаунта учителя, на отдельных демо-данных (настоящие данные не затрагиваются)
+ACT.previewStudent = async () => {
+  if (!isTeacher() || S.demo) return;
+  S.real = { sb: S.sb, me: S.me };
+  S.sb = createMock(); S.sb.resetDemo(); S.sb = createMock(); S.demo = true;
+  await doLogin("AIGERIM1", "demo123"); go();
+};
+ACT.exitPreview = () => { location.hash = "#/"; location.reload(); };
 FORM.login = async (f, fd) => { auth.code = fd.get("code").trim(); await doLogin(auth.code, fd.get("password")); go(); };
 FORM.reg1 = async (f, fd) => {
   const code = fd.get("code").trim().toUpperCase(); auth.code = code;
@@ -68,7 +72,7 @@ function chrome(r) {
   const on = !!S.me;
   document.getElementById("topbar").classList.toggle("hidden", !on);
   document.getElementById("nav").classList.toggle("hidden", !on);
-  document.getElementById("demo-banner").classList.toggle("hidden", !S.demo);
+  document.getElementById("demo-banner").classList.toggle("hidden", !(S.demo && S.me));
   if (!on) return;
   document.getElementById("who").textContent = `${S.me.first_name} ${S.me.last_name}${isTeacher() ? " · учитель" : ""}`;
   updateChip();

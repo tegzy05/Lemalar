@@ -65,6 +65,7 @@ function createGasClient(url) {
     auth: {
       async signUp({ email, password }) { const r = await send({ k: "auth", op: "signUp", code: codeOf(email), password }); if (!r.error) setSession(r.data.session.access_token, r.data.user.id); return r; },
       async signInWithPassword({ email, password }) { const r = await send({ k: "auth", op: "signIn", code: codeOf(email), password }); if (!r.error) setSession(r.data.session.access_token, r.data.user.id); return r; },
+      async changePassword(oldPw, newPw) { const r = await send({ k: "rpc", name: "change_password", args: { p_old: oldPw, p_new: newPw } }); if (!r.error && r.data?.token) setSession(r.data.token, uid); return r; },
       async signOut() { setSession(null, null); return { error: null }; },
       async getSession() { return { data: { session: token ? { user: { id: uid } } : null }, error: null }; },
     },
