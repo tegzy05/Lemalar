@@ -6,6 +6,6 @@
 //  Адрес не секретный: данные доступны только после входа по коду и паролю.
 // ============================================================
 window.CONFIG = {
-  API_URL: "",
+  API_URL: "https://script.google.com/macros/s/AKfycbz3yEyTSoHMx4duy5fNHmyY4-QySjsBMSPKOVw7GUtd81AJx4wdrEhJ_EmiYt2C_GAu/exec",
   APP_NAME: "Лемалар · Тьюторы",
 };
