@@ -16,8 +16,7 @@ function authView() {
   const demo = S.demo;
   return html`<div class="auth">
     <img class="logo" src="icons/icon-192.png" alt="">
-    <h1 class="center">Лемалар · Тьюторы</h1>
-    <p class="center muted small">Изучаем Лемалар каждый день: слова, понимание, повторение.</p>
+    <h1 class="center">Lessons</h1>
     <div class="card">
       <div class="seg"><button class="${auth.mode === "login" ? "on" : ""}" data-act="authMode" data-m="login">Вход</button><button class="${auth.mode === "reg" ? "on" : ""}" data-act="authMode" data-m="reg">Регистрация</button></div>
       ${auth.mode === "login" ? html`<form data-form="login">
