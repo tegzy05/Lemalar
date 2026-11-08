@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Лемалар · Тьюторы</title>
+<meta name="description" content="Изучение Лемалар: карточки, тесты, домашние задания и обсуждения">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0e4d45">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Лемалар">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar" class="hidden">
+  <div class="brand">Лемалар<small id="who"></small></div>
+  <span class="chip" id="pts-chip">0 ★</span>
+</header>
+<div id="demo-banner" class="demo-banner hidden">ДЕМО-режим: данные хранятся только на этом устройстве. <a href="#" data-act="resetDemo">Сбросить демо</a></div>
+<main id="app"><div class="boot">Загрузка…</div></main>
+<nav id="nav" class="hidden"><div class="inner" id="nav-inner"></div></nav>
+
+<script src="config.js"></script>
+<script src="js/util.js"></script>
+<script src="js/mock.js"></script>
+<script src="js/gas.js"></script>
+<script src="js/data.js"></script>
+<script src="js/student.js"></script>
+<script src="js/teacher.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
