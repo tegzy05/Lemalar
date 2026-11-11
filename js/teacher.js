@@ -234,7 +234,7 @@ function tPeople() {
   if (!codes) loadCodes();
   const st = students();
   return html`<div class="card"><h3>Добавить участников</h3>
-    <p class="small muted">Настоящие <b>имя и фамилия</b> обязательны. По одному человеку на строку: <code>Имя Фамилия</code> (через запятую можно добавить команду и <b>уровень турецкого</b>: <code>Айгерим Сейтова, Бирлик, продвинутый</code>; уровни — начинающий / средний / продвинутый, без указания — средний). Каждому будет создан личный код для регистрации.</p>
+    <p class="small muted">Настоящие <b>имя и фамилия</b> обязательны. По одному человеку на строку: <code>Имя Фамилия</code> (через запятую можно добавить команду и <b>уровень турецкого</b>: <code>Айгерим Сейтова, Бирлик, продвинутый</code>; уровни — начинающий / средний / продвинутый, без указания — средний; четвёртым полем можно сразу назначить наставника: <code>Айша Қали, Нур, начинающий, Мавлуда Гаипова</code>). Каждому будет создан личный код для регистрации.</p>
     <p class="small muted">Уровень задаёт множитель баллов за учёбу: начинающий ×2, средний ×1,5, продвинутый ×1. Продвинутый наставник получает +25% от баллов своего подопечного-новичка за учёбу (до 10 в день).</p>
     <form data-form="roster"><textarea name="text" required style="min-height:150px" placeholder="Айгерим Сейтова, Бирлик, продвинутый&#10;Данияр Ахметов, Нур, начинающий"></textarea><button class="btn block mt">Добавить в группу</button></form></div>
   ${lastAdded ? html`<div class="card gold"><b>Только что добавлены — разошлите коды:</b><pre style="white-space:pre-wrap;font:inherit;margin:8px 0">${lastAdded}</pre><button class="btn sm" data-act="copyAdded">Скопировать</button></div>` : ""}
@@ -257,15 +257,27 @@ async function loadCodes() {
 FORM.roster = async (f, fd) => {
   const lines = fd.get("text").split(/\r?\n/).map((s) => s.trim()).filter(Boolean), rows = [], bad = [];
   lines.forEach((line, i) => {
-    const [namePart, team, lvl] = line.split(",").map((s) => s.trim());
+    const [namePart, team, lvl, mentorName] = line.split(",").map((s) => s.trim());
     const level = parseLevel(lvl);
     if (level === null) { bad.push(`${i + 1}: уровень «${lvl}» — напишите начинающий, средний или продвинутый`); return; }
     const w = namePart.split(/\s+/);
     if (w.length < 2 || !w.every((x) => NAME_RE.test(x))) { bad.push(`${i + 1}: «${line}»`); return; }
-    rows.push({ code: genCode(), first_name: w[0], last_name: w.slice(1).join(" "), role: "student", team: team || null, level });
+    rows.push({ code: genCode(), first_name: w[0], last_name: w.slice(1).join(" "), role: "student", team: team || null, level, _mentor: mentorName || "" });
   });
   if (bad.length) throw new Error(`Нужны имя и фамилия (только буквы). Проверьте строки — ${bad.join("; ")}`);
+  const wantMentor = rows.filter((r) => r._mentor);
+    const mentorOf = new Map(wantMentor.map((r) => [r.code, r._mentor.toLowerCase().replace(/\s+/g, " ")]));
+  rows.forEach((r) => { delete r._mentor; });
   const saved = await q(S.sb.from("profiles").insert(rows).select());
+  const all = [...S.people, ...(saved || [])], key = (p) => `${p.first_name} ${p.last_name}`.toLowerCase();
+  const missing = [];
+  for (const r of saved || []) {
+    const mn = mentorOf.get(r.code); if (!mn) continue;
+    const m = all.find((p) => key(p) === mn);
+    if (!m) { missing.push(`${r.first_name} ${r.last_name}: наставник «${mn}» не найден`); continue; }
+    await q(S.sb.from("profiles").update({ mentor: m.uid }).eq("uid", r.uid));
+  }
+  if (missing.length) toast(missing.join("; "), "err");
   lastAdded = (saved || rows).map((r) => `${r.last_name} ${r.first_name} — ${r.code}`).join("\n");
   window._tCodes = null; await loadAll(); toast(`Добавлено: ${rows.length}`, "ok"); render();
 };
