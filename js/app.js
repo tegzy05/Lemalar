@@ -39,12 +39,25 @@ function authView() {
 }
 ACT.authMode = (el) => { auth = { mode: el.dataset.m, step: 1, code: "", info: null }; render(); };
 ACT.authBack = () => { auth.step = 1; render(); };
-// Предпросмотр «как видят ученики» — только из аккаунта учителя, на отдельных демо-данных (настоящие данные не затрагиваются)
-ACT.previewStudent = async () => {
-  if (!isTeacher() || S.demo) return;
-  S.real = { sb: S.sb, me: S.me };
-  S.sb = createMock(); S.sb.resetDemo(); S.sb = createMock(); S.demo = true;
-  await doLogin("AIGERIM1", "demo123"); go();
+// Просмотр «глазами ученика»: настоящие данные выбранного ученика, только чтение (ничего не сохраняется и баллы не начисляются)
+const PREVIEW_WRITES = new Set(["insert", "update", "upsert", "delete"]), PREVIEW_RPC_OK = new Set(["leaderboard", "checkins", "progress_summary", "card_stats", "test_summary", "check_invite"]);
+function readOnlyClient(real) {
+  let warned = 0;
+  const note = () => { if (Date.now() - warned > 4000) { warned = Date.now(); toast("Режим просмотра: изменения не сохраняются", ""); } };
+  const noop = () => { note(); const r = { data: [], error: null }; const o = { then: (res, rej) => Promise.resolve(r).then(res, rej) }; ["select", "eq", "single", "maybeSingle", "order", "in", "limit"].forEach((m) => (o[m] = () => o)); return o; };
+  return {
+    from: (t) => new Proxy(real.from(t), { get: (tg, p) => (PREVIEW_WRITES.has(p) ? noop : typeof tg[p] === "function" ? tg[p].bind(tg) : tg[p]) }),
+    rpc: (name, args) => (PREVIEW_RPC_OK.has(name) ? real.rpc(name, args) : (note(), Promise.resolve({ data: 0, error: null }))),
+    auth: real.auth,
+  };
+}
+FORM.preview = async (f, fd) => {
+  if (!isTeacher() || S.preview) return;
+  const st = S.people.find((p) => p.uid === fd.get("uid") && p.role === "student");
+  if (!st) throw new Error("Выберите ученика");
+  S.real = { sb: S.sb, me: S.me }; S.preview = st;
+  S.sb = readOnlyClient(S.real.sb); S.me = st;
+  await loadAll(); location.hash = "#/home"; render();
 };
 ACT.exitPreview = () => { location.hash = "#/"; location.reload(); };
 FORM.login = async (f, fd) => { auth.code = fd.get("code").trim(); await doLogin(auth.code, fd.get("password")); go(); };
@@ -71,7 +84,8 @@ function chrome(r) {
   const on = !!S.me;
   document.getElementById("topbar").classList.toggle("hidden", !on);
   document.getElementById("nav").classList.toggle("hidden", !on);
-  document.getElementById("demo-banner").classList.toggle("hidden", !(S.demo && S.me));
+  const bn = document.getElementById("demo-banner"); bn.classList.toggle("hidden", !S.preview);
+  if (S.preview) bn.innerHTML = `👁 Вы смотрите глазами: <b>${esc(S.preview.first_name + " " + S.preview.last_name)}</b> — только просмотр, ничего не сохраняется. <a href="#" data-act="exitPreview">Выйти в аккаунт учителя</a>`;
   if (!on) return;
   document.getElementById("who").textContent = `${S.me.first_name} ${S.me.last_name}${isTeacher() ? " · учитель" : ""}`;
   updateChip();
