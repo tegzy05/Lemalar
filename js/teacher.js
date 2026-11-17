@@ -76,6 +76,7 @@ function tStudent(uid) {
   <div class="card"><h3>Тесты</h3>${tests.length ? html`<div class="list">${tests.map((t) => html`<div class="item row between"><span>${lessonById(t.lesson_id) ? "Урок " + lessonById(t.lesson_id).num : "—"} (попыток: ${t.tries})</span><b>${t.best}/${t.total}</b></div>`)}</div>` : html`<p class="muted">Нет попыток.</p>`}</div>
   ${isTeacher() ? html`  <div class="card"><h3>Домашние задания</h3>${sh ? (sh.length ? html`<div class="list">${sh.map((h) => html`<div class="item"><div class="small muted">Урок ${lessonById(h.lesson_id)?.num ?? "?"}: ${lessonById(h.lesson_id)?.homework || ""}</div><div style="white-space:pre-wrap">${h.answer}</div></div>`)}</div>` : html`<p class="muted">Пока не сдавал(а).</p>`) : html`<p class="muted">Загрузка…</p>`}</div>
   <div class="card"><h3>Дневник размышлений</h3>${sd ? (sd.length ? html`<div class="list">${sd.map((d) => html`<div class="item"><div class="tiny muted">${fmtDate(d.day)}</div><div style="white-space:pre-wrap">${d.body}</div></div>`)}</div>` : html`<p class="muted">Записей нет.</p>`) : html`<p class="muted">Загрузка…</p>`}</div>` : ""}
+  ${isObserver() ? oStudentExtra(uid) : ""}
   ${historyCard(uid)}`;
 }
 async function loadStudentDetail(uid) {

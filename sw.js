@@ -1,6 +1,6 @@
 // Сервис-воркер: приложение открывается быстро и запускается даже при слабой сети.
 // Данные (баллы, карточки) всегда берутся с сервера, поэтому для работы нужен интернет.
-const CACHE = "lemalar-v5";
+const CACHE = "lemalar-v6";
 const SHELL = ["./", "index.html", "style.css", "config.js", "manifest.webmanifest",
   "js/util.js", "js/gas.js", "js/data.js", "js/student.js", "js/teacher.js", "js/classes.js", "js/app.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];

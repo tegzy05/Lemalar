@@ -134,20 +134,79 @@ ACT.histCsv = (el) => {
 };
 
 // ---------- наблюдательный аккаунт ----------
-const OTABS = [["overview", "Обзор"], ["history", "История баллов"], ["lessons", "Уроки"]];
+// Видит ту же статистику, что и учитель (обзор, уроки, карточки, группа, посещаемость, баллы, страницы учеников),
+// но только для чтения. Не видит: коды входа, тексты домашних заданий, дневники, черновики.
+const OTABS = [["overview", "Обзор"], ["lessons", "Уроки"], ["cards", "Карточки"], ["people", "Группа"], ["att", "Посещаемость"], ["points", "Баллы"], ["history", "История баллов"]];
 function observerView(tab = "overview", arg) {
-  const fn = { overview: () => tOverview(), history: () => historyCard(), lessons: oLessons, student: () => tStudent(arg) }[tab] || (() => tOverview());
-  return html`<h1>Класс «${curClass()?.name || ""}»</h1><p class="small muted">Наблюдательный аккаунт: только просмотр.</p>
-  <div class="tabs">${OTABS.map(([k, n]) => html`<a href="#/o/${k}" class="${k === tab ? "on" : ""}">${n}</a>`)}</div>${fn()}`;
+  const fn = { overview: () => tOverview(), lessons: oLessons, cards: oCards, people: oPeople, att: oAtt, points: oPoints, history: () => historyCard(), student: () => tStudent(arg) }[tab] || (() => tOverview());
+  return html`<h1>Класс «${curClass()?.name || ""}»</h1><p class="small muted">Наблюдательный аккаунт: вся статистика, только просмотр.</p>
+  <div class="tabs">${OTABS.map(([k, n]) => html`<a href="#/o/${k}" class="${k === tab || (tab === "student" && k === "overview") ? "on" : ""}">${n}</a>`)}</div>${fn()}`;
 }
+const pct = (a, b) => (b ? Math.round(a / b * 100) : null);
 function oLessons() {
-  const ls = S.lessons.slice().sort((a, b) => b.num - a.num), n = students().length;
-  return html`${ls.map((l) => html`<div class="card"><div class="row between"><h3 style="margin:0">Урок ${l.num}: ${l.title}</h3><span class="small muted">${fmtDate(l.lesson_date)}</span></div>
+  const ls = S.lessons.slice().sort((a, b) => b.num - a.num), st = students(), reg = st.filter((p) => p.registered);
+  return html`${ls.map((l) => {
+    const present = S.att.filter((a) => a.lesson_id === l.id && a.present).length, hw = S.hw.filter((h) => h.lesson_id === l.id).length;
+    const tt = S.tTests.filter((t) => t.lesson_id === l.id), avg = tt.length ? Math.round(sum(tt, (t) => (t.total ? t.best / t.total : 0)) / tt.length * 100) : null;
+    const cs = S.cards.filter((c) => c.lesson_id === l.id && c.status === "approved");
+    return html`<div class="card"><div class="row between"><h3 style="margin:0">Урок ${l.num}: ${l.title}</h3><span class="small muted">${fmtDate(l.lesson_date)}</span></div>
     ${l.summary ? html`<p class="small" style="white-space:pre-wrap">${l.summary}</p>` : ""}
-    <p class="small muted">${S.cards.filter((c) => c.lesson_id === l.id && c.status === "approved").length} карточек · присутствовало ${S.att.filter((a) => a.lesson_id === l.id && a.present).length} из ${n} · ДЗ сдали ${S.hw.filter((h) => h.lesson_id === l.id).length}${l.homework ? "" : " (ДЗ не задано)"} · тест: ${l.test_open ? "открыт" : "закрыт"}</p>
-    ${l.homework ? html`<div class="small"><b>ДЗ:</b> ${l.homework}</div>` : ""}</div>`)}
+    <div class="row wrap mt"><span class="badge">${cs.length} карточек</span><span class="badge ${present ? "ok" : "grey"}">присутствовало ${present} из ${st.length}</span>
+      <span class="badge ${l.homework ? (hw ? "ok" : "grey") : "grey"}">${l.homework ? `ДЗ сдали ${hw} из ${reg.length}` : "ДЗ не задано"}</span>
+      <span class="badge ${l.test_open ? "gold" : "grey"}">тест: ${l.test_open ? "открыт" : "закрыт"}</span>${avg != null ? html`<span class="badge">средний результат теста ${avg}% (${tt.length} чел.)</span>` : ""}</div>
+    ${l.homework ? html`<div class="small mt"><b>ДЗ:</b> ${l.homework}${l.homework_due ? html` <span class="muted">· срок ${fmtDate(l.homework_due)}</span>` : ""}</div>` : ""}
+    ${l.discussion_topic ? html`<div class="small mt"><b>Тема обсуждения:</b> ${l.discussion_topic}</div>` : ""}
+    ${l.slides_url ? html`<div class="small mt"><a href="${l.slides_url}" target="_blank" rel="noopener">Презентация ↗</a></div>` : ""}
+    ${tt.length ? html`<details class="mt"><summary>Результаты теста по ученикам</summary><div class="list mt">${tt.slice().sort((a, b) => (b.total ? b.best / b.total : 0) - (a.total ? a.best / a.total : 0)).map((t) => html`<div class="item row between"><a href="${studentHref(t.user_id)}">${fullName(person(t.user_id))}</a><span><b>${t.best}/${t.total}</b> <span class="muted tiny">попыток: ${t.tries}</span></span></div>`)}</div></details>` : ""}</div>`; })}
   ${ls.length ? "" : html`<div class="card muted">Уроков пока нет.</div>`}`;
 }
+function oCards() {
+  const ls = S.lessons.slice().sort((a, b) => a.num - b.num);
+  if (!ls.length) return html`<div class="card muted">Уроков пока нет.</div>`;
+  const lid = (ls.find((l) => l.id === tLesson) || ls[ls.length - 1]).id; tLesson = lid;
+  const cs = S.cards.filter((c) => c.lesson_id === lid && c.status === "approved");
+  return html`<div class="card"><label style="margin-top:0">Урок</label><select data-change="pickLesson">${ls.map((l) => html`<option value="${l.id}" ${l.id === lid ? "selected" : ""}>Урок ${l.num}: ${l.title}</option>`)}</select></div>
+  <div class="card"><h3>Карточки урока (${cs.length})</h3><p class="small muted">Справа — доля ошибок по классу (учитывается, когда слово встретилось не менее 3 раз).</p>
+  <div class="list">${cs.map((c) => { const s = S.tCards[c.id], n = s ? s.right_total + s.wrong_total : 0, err = n ? Math.round(s.wrong_total / n * 100) : null;
+    return html`<div class="item"><div class="row between"><div class="grow"><b dir="auto">${c.term}</b> — ${c.translation} ${c.kind === "idea" ? html`<span class="badge">идея</span>` : ""}</div>
+      ${n >= 3 ? html`<span class="badge ${err >= 40 ? "bad" : err >= 20 ? "gold" : "ok"}">${err}% ошибок</span>` : html`<span class="badge grey">мало данных</span>`}</div>
+      <div class="small muted">${c.explanation}</div>${c.example ? html`<div class="small mt"><i>${c.example}</i></div>` : ""}${c.source_ref ? html`<div class="tiny muted">${c.source_ref}</div>` : ""}</div>`; })}
+    ${cs.length ? "" : html`<div class="muted item">Карточек пока нет.</div>`}</div></div>`;
+}
+function oPeople() {
+  const st = students().slice().sort((a, b) => a.last_name.localeCompare(b.last_name)), nameOf = (uid) => (uid ? fullName(person(uid)) : "—");
+  const teams = {}; st.forEach((p) => { if (p.team) (teams[p.team] ||= []).push(p); });
+  return html`<div class="card"><h3 style="margin:0">Класс «${curClass()?.name || ""}»: ${st.length} уч., в системе ${st.filter((p) => p.registered).length}</h3>
+    <div class="tbl-wrap mt"><table><thead><tr><th>Ученик</th><th>Турецкий</th><th>Команда</th><th>Наставник</th><th>Статус</th></tr></thead><tbody>
+    ${st.map((p) => html`<tr><td><a href="${studentHref(p.uid)}">${fullName(p)}</a></td><td>${levelOf(p).ru}</td><td>${p.team || "—"}</td><td>${nameOf(p.mentor)}</td>
+      <td>${p.registered ? html`<span class="badge ok">в системе</span>` : html`<span class="badge grey">ещё не вошёл(ла)</span>`}</td></tr>`)}</tbody></table></div></div>
+  ${Object.keys(teams).length ? html`<div class="card"><h3>Команды</h3><div class="list">${Object.entries(teams).map(([n, m]) => html`<div class="item"><b>${n}</b> <span class="muted small">· ${m.length} уч. · баллы всего ${sum(m, (p) => S.board[p.uid]?.total || 0)}, за неделю ${sum(m, (p) => S.board[p.uid]?.week || 0)}</span>
+    <div class="small">${m.map((p) => fullName(p) + (levelOf(p).rank === 3 ? " ★" : "")).join(", ")}</div></div>`)}</div><p class="hint">★ — продвинутый уровень (наставник).</p></div>` : ""}`;
+}
+function oAtt() {
+  const ls = S.lessons.slice().sort((a, b) => a.num - b.num), st = students().filter((p) => p.registered).sort((a, b) => a.last_name.localeCompare(b.last_name));
+  if (!ls.length) return html`<div class="card muted">Уроков пока нет.</div>`;
+  const was = (l, p) => S.att.find((a) => a.lesson_id === l.id && a.user_id === p.uid);
+  return html`<div class="card"><h3>Посещаемость</h3><p class="small muted">✓ был(а) · ✗ не был(а) · · не отмечено</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Ученик</th>${ls.map((l) => html`<th class="num">У${l.num}</th>`)}<th class="num">Итого</th></tr></thead><tbody>
+    ${st.map((p) => { const n = ls.filter((l) => was(l, p)?.present).length; return html`<tr><td><a href="${studentHref(p.uid)}">${fullName(p)}</a></td>${ls.map((l) => { const a = was(l, p); return html`<td class="num">${a ? (a.present ? "✓" : "✗") : "·"}</td>`; })}<td class="num"><b>${n}/${ls.length}</b> <span class="muted tiny">${pct(n, ls.length)}%</span></td></tr>`; })}</tbody>
+    <tfoot><tr><td><b>Присутствовало</b></td>${ls.map((l) => html`<td class="num"><b>${S.att.filter((a) => a.lesson_id === l.id && a.present).length}</b></td>`)}<td></td></tr></tfoot></table></div></div>`;
+}
+function oPoints() {
+  const rows = rankRows("all"), wk = rankRows("week"), tot = sum(rows, (r) => r.pts);
+  return html`<div class="card"><h3>Рейтинг за всё время</h3><p class="small muted">Всего баллов у класса: <b>${tot}</b> · в среднем на ученика: <b>${rows.length ? Math.round(tot / rows.length) : 0}</b></p>
+    <div class="list">${rows.map((r) => html`<div class="item row between"><span><span class="rank r${r.rank}">${r.rank}</span> <a href="${studentHref(r.p.uid)}">${fullName(r.p)}</a> <span class="badge grey">${levelOf(r.p).ru}</span></span><span><b>${r.pts}</b> <span class="muted tiny">нед. ${S.board[r.p.uid]?.week || 0}</span></span></div>`)}</div></div>
+  <div class="card"><h3>Лидеры недели</h3><div class="list">${wk.slice(0, 10).map((r) => html`<div class="item row between"><span><span class="rank r${r.rank}">${r.rank}</span> ${fullName(r.p)}</span><b>${r.pts}</b></div>`)}${wk.length ? "" : html`<div class="muted item">На этой неделе баллов пока нет.</div>`}</div></div>
+  ${historyCard()}`;
+}
+// на странице ученика (для наблюдателя): сдача ДЗ и посещаемость без текстов ответов
+function oStudentExtra(uid) {
+  const ls = S.lessons.slice().sort((a, b) => a.num - b.num);
+  return html`<div class="card"><h3>Уроки: посещаемость и ДЗ</h3><div class="list">${ls.map((l) => { const a = S.att.find((x) => x.lesson_id === l.id && x.user_id === uid), h = S.hw.find((x) => x.lesson_id === l.id && x.user_id === uid);
+    return html`<div class="item row between"><span>Урок ${l.num}: ${l.title}</span><span>${a ? (a.present ? html`<span class="badge ok">был(а)</span>` : html`<span class="badge bad">не был(а)</span>`) : html`<span class="badge grey">не отмечено</span>`} ${l.homework ? (h ? html`<span class="badge ok">ДЗ сдано${h.created_at ? " " + fmtDate(h.created_at) : ""}</span>` : html`<span class="badge bad">ДЗ нет</span>`) : ""}</span></div>`; })}
+    ${ls.length ? "" : html`<div class="muted item">Уроков пока нет.</div>`}</div><p class="hint">Тексты домашних заданий и дневники видит только учитель.</p></div>`;
+}
+
 function observerMe() {
   return html`<h1>Мой профиль</h1><div class="card"><b style="font-size:1.1rem">${S.me.first_name} ${S.me.last_name}</b>
     <div class="small muted">Наблюдатель класса «${curClass()?.name || ""}» · только просмотр</div></div>
