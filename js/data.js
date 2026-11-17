@@ -3,6 +3,7 @@
 // ============================================================
 const S = {
   sb: null, demo: false, me: null,
+  classes: [], classId: null, allPeople: [], allLessons: [],
   people: [], lessons: [], cards: [], questions: [], progress: {}, attempts: [], hw: [], diary: [], att: [], posts: [],
   board: {}, checkins: {},            // board[uid] = {total, week}; checkins[uid] = Set(days)
   tProg: [], tCards: {}, tTests: [],  // только для учителя
@@ -28,6 +29,10 @@ function parseLevel(s) {
 
 async function q(p) { const { data, error } = await p; if (error) throw error; return data; }
 const isTeacher = () => S.me?.role === "teacher";
+const isObserver = () => S.me?.role === "observer";
+const isStaff = () => isTeacher() || isObserver();
+const classById = (id) => S.classes.find((c) => c.id === id);
+const curClass = () => classById(S.classId);
 const person = (uid) => S.people.find((p) => p.uid === uid);
 const fullName = (p) => (p ? `${p.first_name} ${p.last_name}` : "—");
 const lessonById = (id) => S.lessons.find((l) => l.id === id);
@@ -50,8 +55,12 @@ function errMsg(e) {
 
 function initClient() {
   const c = window.CONFIG || {};
-  if (c.API_URL) { S.sb = createGasClient(c.API_URL); S.demo = false; }
-  else { S.sb = createMock(); S.demo = true; }
+  if (c.API_URL) { S.sb = createGasClient(c.API_URL); S.demo = false; return; }
+  // сервер не подключён: клиент-заглушка, вход невозможен
+  const err = { data: null, error: { message: "Сервер не подключён: впишите адрес в config.js" } };
+  const chain = { select() { return this; }, eq() { return this; }, order() { return this; }, then: (res) => Promise.resolve(err).then(res) };
+  S.sb = { from: () => chain, rpc: async () => err, auth: { signInWithPassword: async () => err, signUp: async () => err, signOut: async () => ({ error: null }), getSession: async () => ({ data: { session: null } }) } };
+  S.demo = true;
 }
 
 const codeToEmail = (code) => `${String(code).trim().toLowerCase()}@tutors.lemalar.app`;
@@ -83,38 +92,55 @@ async function afterAuth() {
   await loadAll();
 }
 
+function pickClassId(classes) {
+  let id = null; try { id = localStorage.getItem("lemalar_class"); } catch {}
+  return classes.find((c) => c.id === id) ? id : (classes[0] || {}).id || null;
+}
 async function loadAll() {
-  const uid = S.me.uid, t = isTeacher();
+  const uid = S.me.uid, t = isTeacher(), staff = isStaff();
+  S.classId = t ? S.classId : S.me.class_id;
+  const cr = await q(S.sb.from("classes").select("*").order("name", { ascending: true }));
+  S.classes = cr;
+  if (t) S.classId = classById(S.classId) ? S.classId : pickClassId(cr);
+  const cid = S.classId;
   const [people, lessons, cards, questions, progress, board, checks, attempts, hw, diary, att, posts] = await Promise.all([
     q(S.sb.from("people").select("*")),
     q(S.sb.from("lessons").select("*").order("num", { ascending: true })),
     q(S.sb.from("cards").select("*").order("created_at", { ascending: true })),
     q(S.sb.from("questions").select("*").order("created_at", { ascending: true })),
     q(S.sb.from("progress").select("*").eq("user_id", uid)),
-    q(S.sb.rpc("leaderboard")),
-    q(S.sb.rpc("checkins", { p_days: 60 })),
+    q(S.sb.rpc("leaderboard", { p_class: cid })),
+    q(S.sb.rpc("checkins", { p_days: 60, p_class: cid })),
     q(S.sb.from("attempts").select("*").eq("user_id", uid)),
-    t ? q(S.sb.from("homework_answers").select("lesson_id,user_id")) : q(S.sb.from("homework_answers").select("*").eq("user_id", uid)),
+    staff ? q(S.sb.from("homework_answers").select("*")) : q(S.sb.from("homework_answers").select("*").eq("user_id", uid)),
     q(S.sb.from("diary").select("*").eq("user_id", uid).order("day", { ascending: false })),
-    t ? q(S.sb.from("attendance").select("*")) : q(S.sb.from("attendance").select("*").eq("user_id", uid)),
+    staff ? q(S.sb.from("attendance").select("*")) : q(S.sb.from("attendance").select("*").eq("user_id", uid)),
     q(S.sb.from("posts").select("*").order("created_at", { ascending: true })),
   ]);
-  S.people = people; S.lessons = lessons; S.cards = cards; S.questions = questions;
-  S.progress = byKey(progress, "card_id"); S.attempts = attempts; S.hw = hw; S.diary = diary; S.att = att; S.posts = posts;
+  // всё, что показываем, относится к выбранному классу (у учителя это переключатель, у остальных — свой класс)
+  const mine = (p) => p.role === "teacher" || (p.role !== "observer" && p.class_id === cid);
+  const lessonsC = lessons.filter((l) => l.class_id === cid), lids = new Set(lessonsC.map((l) => l.id)), members = new Set(people.filter((p) => p.role === "student" && p.class_id === cid).map((p) => p.uid));
+  S.allPeople = people; S.allLessons = lessons;
+  S.people = people.filter(mine); S.lessons = lessonsC;
+  S.cards = cards.filter((c) => lids.has(c.lesson_id)); S.questions = questions.filter((x) => lids.has(x.lesson_id));
+  S.progress = byKey(progress, "card_id"); S.attempts = attempts;
+  S.hw = staff ? hw.filter((h) => members.has(h.user_id)) : hw; S.diary = diary;
+  S.att = staff ? att.filter((a) => members.has(a.user_id)) : att; S.posts = posts.filter((x) => lids.has(x.lesson_id));
   S.board = byKey(board, "user_id"); setCheckins(checks);
-  if (t) await loadTeacherStats();
+  if (staff) await loadTeacherStats(members);
 }
 function setCheckins(rows) {
   S.checkins = {};
   for (const r of rows) (S.checkins[r.user_id] ||= new Set()).add(r.day);
 }
-async function loadTeacherStats() {
+async function loadTeacherStats(members) {
   const [pr, cs, ts] = await Promise.all([q(S.sb.rpc("progress_summary")), q(S.sb.rpc("card_stats")), q(S.sb.rpc("test_summary"))]);
-  S.tProg = byKey(pr, "user_id"); S.tCards = byKey(cs, "card_id"); S.tTests = ts;
+  S.tProg = byKey(pr.filter((r) => !members || members.has(r.user_id)), "user_id"); S.tCards = byKey(cs, "card_id"); S.tTests = ts.filter((r) => !members || members.has(r.user_id));
 }
 async function refreshBoard() {
-  const [board, checks] = await Promise.all([q(S.sb.rpc("leaderboard")), q(S.sb.rpc("checkins", { p_days: 60 }))]);
+  const [board, checks] = await Promise.all([q(S.sb.rpc("leaderboard", { p_class: S.classId })), q(S.sb.rpc("checkins", { p_days: 60, p_class: S.classId }))]);
   S.board = byKey(board, "user_id"); setCheckins(checks);
+  if (typeof resetHist === "function") resetHist();
 }
 
 // ---------- серии ----------

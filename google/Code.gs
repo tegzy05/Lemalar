@@ -33,8 +33,9 @@ const MENTOR_DAILY_CAP = 10;        // максимум в день на одн�
 const T_ = (s) => s.split(',').map((x) => { const p = x.trim().split(':'); return { n: p[0], t: p[1] || 't' }; });
 // типы: t — текст, n — число, b — да/нет, j — JSON
 const SCHEMA = {
-  profiles:         { cols: T_('uid,auth_id,code,first_name,last_name,role,team,mentor,last_seen,created_at,salt,hash,pwv:n,level'), pk: ['uid'] },
-  lessons:          { cols: T_('id,num:n,title,lesson_date,summary,slides_url,discussion_topic,discussion_open:b,homework,homework_due,test_open:b,test_minutes:n,test_attempts:n,published:b,created_at'), pk: ['id'] },
+  profiles:         { cols: T_('uid,auth_id,code,first_name,last_name,role,team,mentor,last_seen,created_at,salt,hash,pwv:n,level,class_id'), pk: ['uid'] },
+  classes:          { cols: T_('id,name,created_at'), pk: ['id'] },
+  lessons:          { cols: T_('id,num:n,title,lesson_date,summary,slides_url,discussion_topic,discussion_open:b,homework,homework_due,test_open:b,test_minutes:n,test_attempts:n,published:b,created_at,class_id'), pk: ['id'] },
   cards:            { cols: T_('id,lesson_id,kind,term,translation,explanation,example,source_ref,status,author,created_at'), pk: ['id'] },
   questions:        { cols: T_('id,lesson_id,author,question,options:j,correct:n,explanation,status,created_at'), pk: ['id'] },
   progress:         { cols: T_('user_id,card_id,box:n,due,right_count:n,wrong_count:n,learned:b,updated_at'), pk: ['user_id', 'card_id'] },
@@ -46,6 +47,8 @@ const SCHEMA = {
   attendance:       { cols: T_('lesson_id,user_id,present:b'), pk: ['lesson_id', 'user_id'] },
 };
 const HIDDEN = { profiles: ['salt', 'hash', 'pwv'] };
+const SCHEMA_VER = '2';   // увеличивайте при изменении схемы — таблица обновится автоматически
+const DEFAULT_CLASS = 'Астқыз';
 const WRITE_RPC = ['touch', 'award', 'teacher_award', 'reset_password', 'upload_slide', 'change_password'];
 const NAME_RE = /^[\p{L}][\p{L}'’\-]+$/u;
 
@@ -160,7 +163,7 @@ function authCtx_(db, token) {
   if (p.length !== 4 || sign_(p.slice(0, 3).join('.')) !== p[3] || Number(p[2]) < Date.now()) return null;
   const prof = db.t('profiles').rows.find((r) => r.uid === p[0]);
   if (!prof || !prof.auth_id || String(prof.pwv || 0) !== p[1]) return null;
-  return { uid: prof.uid, role: prof.role };
+  return { uid: prof.uid, role: prof.role, class_id: prof.class_id };
 }
 function authCall_(db, c) {
   const code = String(c.code || '').trim().toUpperCase();
@@ -197,6 +200,7 @@ function isWrite_(c) {
   return (c.k === 'q' && c.op && c.op !== 'select') || (c.k === 'auth' && c.op === 'signUp') || (c.k === 'rpc' && WRITE_RPC.indexOf(c.name) >= 0);
 }
 function processBatch_(req) {
+  ensureMigrated_();
   const calls = req.calls || [];
   const lock = calls.some(isWrite_) ? LockService.getScriptLock() : null;
   if (lock) lock.waitLock(25000);
@@ -224,7 +228,13 @@ function makeMatcher_(filters) {
     return true;
   });
 }
-function pubSet_(db) { const s = {}; db.t('lessons').rows.forEach((l) => { if (l.published) s[l.id] = true; }); return s; }
+function pubSet_(db, cls) { const s = {}; db.t('lessons').rows.forEach((l) => { if (l.published && (!cls || l.class_id === cls)) s[l.id] = true; }); return s; }
+function membersOf_(db, cls) { const s = {}; db.t('profiles').rows.forEach((p) => { if (p.role === 'student' && p.class_id === cls) s[p.uid] = true; }); return s; }
+// чьи данные видит этот пользователь: учитель — всех (null), остальные — свой класс
+function scopeOf_(db, ctx, cls) {
+  if (ctx.role === 'teacher') return cls ? membersOf_(db, cls) : null;
+  return membersOf_(db, ctx.class_id);
+}
 function pub_(t, r) {
   if (!SCHEMA[t]) { const o = {}; Object.keys(r).forEach((k) => { if (k[0] !== '_') o[k] = r[k]; }); return o; }
   const hide = HIDDEN[t] || [], o = {};
@@ -232,19 +242,26 @@ function pub_(t, r) {
   return o;
 }
 function selectRows_(db, ctx, q) {
-  const t = q.t, isT = ctx.role === 'teacher', uid = ctx.uid;
+  const t = q.t, isT = ctx.role === 'teacher', isO = ctx.role === 'observer', uid = ctx.uid, cls = ctx.class_id;
   let rows;
   if (t === 'people') {
-    rows = db.t('profiles').rows.map((p) => ({ uid: p.uid, first_name: p.first_name, last_name: p.last_name, role: p.role, team: p.team, mentor: p.mentor, level: p.level, last_seen: p.last_seen, registered: !!p.auth_id }));
+    rows = db.t('profiles').rows.filter((p) => isT || p.role === 'teacher' || (p.role !== 'observer' && p.class_id === cls))
+      .map((p) => ({ uid: p.uid, first_name: p.first_name, last_name: p.last_name, role: p.role, team: p.team, mentor: p.mentor, level: p.level, class_id: p.class_id, last_seen: p.last_seen, registered: !!p.auth_id }));
   } else {
     if (!SCHEMA[t]) fail_('unknown table');
     rows = db.t(t).rows;
     if (!isT) {
-      if (t === 'profiles') rows = rows.filter((r) => r.uid === uid);
-      else if (t === 'lessons') rows = rows.filter((r) => r.published);
-      else if (t === 'cards' || t === 'questions') { const pub = pubSet_(db); rows = rows.filter((r) => r.author === uid || (r.status === 'approved' && pub[r.lesson_id])); }
-      else if (t === 'posts') { const pub = pubSet_(db); rows = rows.filter((r) => pub[r.lesson_id]); }
-      else if (['progress', 'attempts', 'homework_answers', 'diary', 'attendance'].indexOf(t) >= 0) rows = rows.filter((r) => r.user_id === uid);
+      const own = (r) => r.user_id === uid;
+      if (t === 'classes') rows = rows.filter((r) => r.id === cls);
+      else if (t === 'profiles') rows = rows.filter((r) => r.uid === uid);
+      else if (t === 'lessons') rows = rows.filter((r) => r.published && r.class_id === cls);
+      else if (t === 'cards' || t === 'questions') { const pub = pubSet_(db, cls); rows = rows.filter((r) => r.author === uid || (r.status === 'approved' && pub[r.lesson_id])); }
+      else if (t === 'posts') { const pub = pubSet_(db, cls); rows = rows.filter((r) => pub[r.lesson_id]); }
+      else if (t === 'diary') rows = isO ? [] : rows.filter(own);
+      else if (['progress', 'attempts', 'homework_answers', 'attendance', 'points_log'].indexOf(t) >= 0) {
+        if (isO) { const m = membersOf_(db, cls), pub = pubSet_(db, cls); rows = rows.filter((r) => m[r.user_id] && (!r.lesson_id || pub[r.lesson_id])); }
+        else rows = rows.filter(own);
+      }
     }
   }
   rows = rows.filter(makeMatcher_(q.filters || []));
@@ -253,7 +270,9 @@ function selectRows_(db, ctx, q) {
     rows = rows.slice().sort((a, b) => { const x = a[col], y = b[col]; if (x === y) return 0; if (x === null || x === undefined) return -dir; if (y === null || y === undefined) return dir; return (x > y ? 1 : -1) * dir; });
   }
   if (q.limit) rows = rows.slice(0, q.limit);
-  return rows.map((r) => pub_(t, r));
+  const out = rows.map((r) => pub_(t, r));
+  if (isO && t === 'homework_answers') out.forEach((r) => { delete r.answer; });   // наблюдатель видит факт сдачи, но не текст ответа
+  return out;
 }
 
 function typed_(t, k, v) {
@@ -271,9 +290,11 @@ function must_(cond, msg) { if (!cond) fail_(msg); }
 function prepareWrite_(db, ctx, t, rec, op) {
   const isT = ctx.role === 'teacher', uid = ctx.uid; let allowed, force = {};
   const needT = () => { if (!isT) fail_('forbidden'); };
+  if (ctx.role === 'observer') fail_('forbidden');   // наблюдатель только читает
   switch (t) {
-    case 'profiles': needT(); allowed = op === 'insert' ? ['code', 'first_name', 'last_name', 'team', 'level'] : ['team', 'mentor', 'level']; break;
-    case 'lessons': needT(); allowed = ['num', 'title', 'lesson_date', 'summary', 'slides_url', 'discussion_topic', 'discussion_open', 'homework', 'homework_due', 'test_open', 'test_minutes', 'test_attempts', 'published']; break;
+    case 'classes': needT(); allowed = ['name']; break;
+    case 'profiles': needT(); allowed = op === 'insert' ? ['code', 'first_name', 'last_name', 'team', 'level', 'class_id', 'role'] : ['team', 'mentor', 'level', 'class_id']; break;
+    case 'lessons': needT(); allowed = ['class_id', 'num', 'title', 'lesson_date', 'summary', 'slides_url', 'discussion_topic', 'discussion_open', 'homework', 'homework_due', 'test_open', 'test_minutes', 'test_attempts', 'published']; break;
     case 'cards':
       if (isT) allowed = ['lesson_id', 'kind', 'term', 'translation', 'explanation', 'example', 'source_ref', 'status'];
       else { must_(op === 'insert', 'forbidden'); allowed = ['lesson_id', 'term', 'translation', 'explanation', 'example', 'source_ref']; force = { kind: 'word', status: 'pending', author: uid }; }
@@ -296,10 +317,17 @@ function prepareWrite_(db, ctx, t, rec, op) {
   validate_(db, ctx, t, out, op);
   return out;
 }
+function classOf_(db, id) { return db.t('classes').rows.find((c) => c.id === id) || null; }
+function inMyClass_(ctx, l) { return ctx.role === 'teacher' || l.class_id === ctx.class_id; }
 function lessonOf_(db, id) { return db.t('lessons').rows.find((l) => l.id === id) || null; }
 function validate_(db, ctx, t, r, op) {
   const isT = ctx.role === 'teacher', ins = op === 'insert';
-  if (t === 'profiles') {
+  if (t === 'classes') {
+    r.name = String(r.name || '').trim(); must_(r.name.length >= 1 && r.name.length <= 60, 'Название класса: до 60 символов');
+    must_(!db.t('classes').rows.some((c) => c.name.toLowerCase() === r.name.toLowerCase()), 'Класс с таким названием уже есть');
+  } else if (t === 'profiles') {
+    if (r.class_id !== undefined && r.class_id !== null) must_(classOf_(db, r.class_id), 'Класс не найден');
+    if (ins) { must_(r.class_id, 'Укажите класс'); r.role = r.role === 'observer' ? 'observer' : 'student'; }
     if (ins) {
       r.first_name = String(r.first_name || '').trim(); r.last_name = String(r.last_name || '').trim();
       must_(NAME_RE.test(r.first_name) && r.last_name.split(/\s+/).every((w) => NAME_RE.test(w)), 'Нужны настоящие имя и фамилия (только буквы)');
@@ -309,6 +337,7 @@ function validate_(db, ctx, t, r, op) {
     if (r.mentor) must_(db.t('profiles').rows.some((p) => p.uid === r.mentor), 'Наставник не найден');
     if (r.level !== undefined && r.level !== null) must_(LEVELS[r.level], 'Уровень: beginner, intermediate или advanced');
   } else if (t === 'lessons') {
+    if (ins) must_(r.class_id, 'Укажите класс'); if (r.class_id) must_(classOf_(db, r.class_id), 'Класс не найден');
     if (ins || r.title !== undefined) must_(!blank_(r.title), 'Укажите название урока');
     if (r.num !== undefined) must_(r.num >= 1, 'Номер урока ≥ 1');
     ['test_minutes', 'test_attempts'].forEach((k) => { if (r[k] !== undefined) must_(r[k] >= 1 && r[k] <= 240, 'Некорректное значение ' + k); });
@@ -318,13 +347,13 @@ function validate_(db, ctx, t, r, op) {
     if (ins || r.explanation !== undefined) must_(r.explanation && String(r.explanation).trim().length >= 3, 'Объяснение обязательно (минимум 3 символа)');
     if (r.kind !== undefined) must_(r.kind === 'word' || r.kind === 'idea', 'Тип: word или idea');
     if (r.status !== undefined) must_(r.status === 'approved' || r.status === 'pending', 'bad status');
-    if (ins) { const l = lessonOf_(db, r.lesson_id); must_(l, 'Урок не найден'); if (!isT) must_(l.published, 'Урок не опубликован'); }
+    if (ins) { const l = lessonOf_(db, r.lesson_id); must_(l && inMyClass_(ctx, l), 'Урок не найден'); if (!isT) must_(l.published, 'Урок не опубликован'); }
   } else if (t === 'questions') {
     if (ins || r.question !== undefined) must_(!blank_(r.question), 'Укажите вопрос');
     if (ins || r.options !== undefined) must_(Array.isArray(r.options) && r.options.length === 4 && r.options.every((o) => !blank_(o)), 'Нужно 4 непустых варианта');
     if (ins || r.correct !== undefined) must_(r.correct >= 0 && r.correct <= 3 && Math.floor(r.correct) === r.correct, 'Неверный номер верного ответа');
     if (ins || r.explanation !== undefined) must_(r.explanation && String(r.explanation).trim().length >= 3, 'Объяснение обязательно (минимум 3 символа)');
-    if (ins) { const l = lessonOf_(db, r.lesson_id); must_(l, 'Урок не найден'); if (!isT) must_(l.published, 'Урок не опубликован'); }
+    if (ins) { const l = lessonOf_(db, r.lesson_id); must_(l && inMyClass_(ctx, l), 'Урок не найден'); if (!isT) must_(l.published, 'Урок не опубликован'); }
   } else if (t === 'progress') {
     if (r.card_id !== undefined) must_(db.t('cards').rows.some((c) => c.id === r.card_id), 'Карточка не найдена');
     if (r.box !== undefined) must_(r.box >= 0 && r.box <= 5, 'bad box');
@@ -332,20 +361,20 @@ function validate_(db, ctx, t, r, op) {
     if (r.due !== undefined) must_(/^\d{4}-\d{2}-\d{2}$/.test(r.due), 'bad due');
     if (r.learned) must_(r.right_count >= 2, 'bad learned');
   } else if (t === 'attempts') {
-    const l = lessonOf_(db, r.lesson_id); must_(l, 'Урок не найден');
+    const l = lessonOf_(db, r.lesson_id); must_(l && inMyClass_(ctx, l), 'Урок не найден');
     must_(r.total >= 1 && r.total <= 200 && r.score >= 0 && r.score <= r.total, 'Некорректный результат');
     if (!isT) {
       must_(l.published && l.test_open, 'Тест закрыт');
       must_(db.t('attempts').rows.filter((a) => a.user_id === ctx.uid && a.lesson_id === r.lesson_id).length < l.test_attempts, 'Попытки закончились');
     }
   } else if (t === 'homework_answers') {
-    const l = lessonOf_(db, r.lesson_id); must_(l && (isT || l.published), 'Урок не найден');
+    const l = lessonOf_(db, r.lesson_id); must_(l && inMyClass_(ctx, l) && (isT || l.published), 'Урок не найден');
     must_(r.answer && String(r.answer).trim().length >= 3, 'Ответ слишком короткий');
   } else if (t === 'diary') {
     must_(r.day === today_(), 'Дневник можно вести только за сегодня');
     must_(r.body && String(r.body).trim().length >= 3, 'Запись слишком короткая');
   } else if (t === 'posts') {
-    const l = lessonOf_(db, r.lesson_id); must_(l, 'Урок не найден');
+    const l = lessonOf_(db, r.lesson_id); must_(l && inMyClass_(ctx, l), 'Урок не найден');
     must_(isT || (l.published && l.discussion_open), 'Обсуждение закрыто');
     must_(r.body && String(r.body).trim().length >= 1 && String(r.body).length <= 2000, 'Сообщение пустое или слишком длинное');
     if (r.parent_id) must_(db.t('posts').rows.some((p) => p.id === r.parent_id && p.lesson_id === r.lesson_id), 'Родительское сообщение не найдено');
@@ -357,6 +386,7 @@ function validate_(db, ctx, t, r, op) {
 function defaults_(t, ctx) {
   const now = nowIso_();
   switch (t) {
+    case 'classes': return { id: uuid_(), created_at: now };
     case 'profiles': return { uid: uuid_(), role: 'student', pwv: 0, level: 'intermediate', created_at: now };
     case 'lessons': return { id: uuid_(), num: 1, discussion_open: false, test_open: false, test_minutes: 15, test_attempts: 2, published: false, created_at: now };
     case 'cards': return { id: uuid_(), kind: 'word', status: 'approved', created_at: now };
@@ -406,7 +436,8 @@ function queryCall_(db, ctx, q) {
         Object.keys(r).forEach((k) => { ex[k] = r[k]; }); tab.touch(ex); out.push(ex);
       } else {
         const row = tab.insert(Object.assign(defaults_(t, ctx), r));
-        if (t === 'profiles') { row.role = 'student'; if (!row.level) row.level = 'intermediate'; }
+        if (t === 'profiles') { if (row.role !== 'observer') row.role = 'student'; if (!row.level) row.level = 'intermediate'; }
+        if (t === 'classes') ensureObserver_(db, row);
         out.push(row);
       }
     });
@@ -425,7 +456,10 @@ function queryCall_(db, ctx, q) {
   if (q.op === 'delete') {
     const gone = tab.remove((row) => {
       if (!match(row)) return false;
-      if (isT) { if (t === 'profiles') must_(row.role !== 'teacher', 'Нельзя удалить учителя'); return ['lessons', 'cards', 'questions', 'posts', 'profiles', 'attendance'].indexOf(t) >= 0 || fail_('forbidden'); }
+      if (isT) {
+        if (t === 'profiles') must_(row.role !== 'teacher', 'Нельзя удалить учителя');
+        if (t === 'classes') { must_(db.t('classes').rows.length > 1, 'Нельзя удалить единственный класс'); must_(!db.t('lessons').rows.some((l) => l.class_id === row.id) && !db.t('profiles').rows.some((p) => p.class_id === row.id && p.role === 'student'), 'В классе есть ученики или уроки — сначала перенесите или удалите их'); db.t('profiles').remove((p) => p.role === 'observer' && p.class_id === row.id); return true; }
+        return ['lessons', 'cards', 'questions', 'posts', 'profiles', 'attendance'].indexOf(t) >= 0 || fail_('forbidden'); }
       if ((t === 'cards' || t === 'questions') && row.author === uid && row.status === 'pending') return true;
       if (t === 'posts' && row.user_id === uid) return true;
       return fail_('forbidden');
@@ -440,11 +474,13 @@ function queryCall_(db, ctx, q) {
 function rpcCall_(db, ctx, name, a) {
   if (name === 'check_invite') {
     const code = String(a.p_code || '').trim().toUpperCase(), p = db.t('profiles').rows.find((r) => r.code === code);
-    return ok_(p ? [{ first_name: p.first_name, last_name: p.last_name, claimed: !!p.auth_id }] : []);
+    const cl = p && p.class_id ? classOf_(db, p.class_id) : null;
+    return ok_(p ? [{ first_name: p.first_name, last_name: p.last_name, claimed: !!p.auth_id, role: p.role, class_name: cl ? cl.name : null }] : []);
   }
   if (!ctx) fail_('unauthorized');
   const isT = ctx.role === 'teacher', uid = ctx.uid;
   const needT = () => must_(isT, 'forbidden');
+  const needTO = () => must_(isT || ctx.role === 'observer', 'forbidden');
   switch (name) {
     case 'claim_invite': {   // регистрация уже выполнена в signUp
       const me = db.t('profiles').rows.find((r) => r.uid === uid);
@@ -455,11 +491,11 @@ function rpcCall_(db, ctx, name, a) {
       if (me && (!me.last_seen || Date.now() - new Date(me.last_seen).getTime() > 5 * 60000)) { me.last_seen = nowIso_(); db.t('profiles').touch(me); }
       return ok_(null);
     }
-    case 'award': return ok_(award_(db, uid, a));
+    case 'award': must_(ctx.role !== 'observer', 'forbidden'); return ok_(award_(db, uid, a));
     case 'teacher_award': {
       needT();
       const d = Number(a.p_delta); must_(!isNaN(d) && d >= -100 && d <= 100, 'bad_delta');
-      must_(db.t('profiles').rows.some((p) => p.uid === a.p_uid), 'Ученик не найден');
+      must_(db.t('profiles').rows.some((p) => p.uid === a.p_uid && p.role === 'student'), 'Ученик не найден');
       const log = db.t('points_log'), ref = a.p_ref ? String(a.p_ref) : uuid_(), reason = String(a.p_reason || 'bonus');
       let row = log.rows.find((r) => r.user_id === a.p_uid && r.reason === reason && r.ref === ref);
       if (row) { row.delta = d; row.note = a.p_note || null; row.updated_at = nowIso_(); log.touch(row); }
@@ -468,8 +504,9 @@ function rpcCall_(db, ctx, name, a) {
     }
     case 'leaderboard': {
       const wsDate = weekStart_(today_()), off = Utilities.formatDate(new Date(), TZ, 'XXX');
-      const thr = new Date(wsDate + 'T00:00:00' + off).toISOString(), m = {};
+      const thr = new Date(wsDate + 'T00:00:00' + off).toISOString(), m = {}, scope = scopeOf_(db, ctx, a.p_class);
       db.t('points_log').rows.forEach((r) => {
+        if (scope && !scope[r.user_id]) return;
         const o = m[r.user_id] || (m[r.user_id] = { user_id: r.user_id, total: 0, week: 0 });
         o.total += r.delta; if (r.reason !== 'weekly_top' && r.updated_at >= thr) o.week += r.delta;
       });
@@ -477,21 +514,22 @@ function rpcCall_(db, ctx, name, a) {
     }
     case 'checkins': {
       const from = addDays_(today_(), -(Number(a.p_days) || 21));
-      return ok_(db.t('points_log').rows.filter((r) => r.reason === 'checkin' && r.ref >= from).map((r) => ({ user_id: r.user_id, day: r.ref })));
+      const sc = scopeOf_(db, ctx, a.p_class);
+      return ok_(db.t('points_log').rows.filter((r) => r.reason === 'checkin' && r.ref >= from && (!sc || sc[r.user_id])).map((r) => ({ user_id: r.user_id, day: r.ref })));
     }
     case 'progress_summary': {
-      needT(); const m = {};
-      db.t('progress').rows.forEach((p) => { const o = m[p.user_id] || (m[p.user_id] = { user_id: p.user_id, seen: 0, learned: 0, right_total: 0, wrong_total: 0 }); o.seen++; if (p.learned) o.learned++; o.right_total += p.right_count; o.wrong_total += p.wrong_count; });
+      needTO(); const m = {}, sc = scopeOf_(db, ctx, null);
+      db.t('progress').rows.filter((p) => !sc || sc[p.user_id]).forEach((p) => { const o = m[p.user_id] || (m[p.user_id] = { user_id: p.user_id, seen: 0, learned: 0, right_total: 0, wrong_total: 0 }); o.seen++; if (p.learned) o.learned++; o.right_total += p.right_count; o.wrong_total += p.wrong_count; });
       return ok_(Object.keys(m).map((k) => m[k]));
     }
     case 'card_stats': {
-      needT(); const m = {};
-      db.t('progress').rows.forEach((p) => { const o = m[p.card_id] || (m[p.card_id] = { card_id: p.card_id, users: 0, right_total: 0, wrong_total: 0 }); o.users++; o.right_total += p.right_count; o.wrong_total += p.wrong_count; });
+      needTO(); const m = {}, sc = scopeOf_(db, ctx, null);
+      db.t('progress').rows.filter((p) => !sc || sc[p.user_id]).forEach((p) => { const o = m[p.card_id] || (m[p.card_id] = { card_id: p.card_id, users: 0, right_total: 0, wrong_total: 0 }); o.users++; o.right_total += p.right_count; o.wrong_total += p.wrong_count; });
       return ok_(Object.keys(m).map((k) => m[k]));
     }
     case 'test_summary': {
-      needT(); const m = {};
-      db.t('attempts').rows.forEach((x) => { const k = x.user_id + x.lesson_id, o = m[k] || (m[k] = { user_id: x.user_id, lesson_id: x.lesson_id, best: 0, total: 0, tries: 0 }); o.best = Math.max(o.best, x.score); o.total = Math.max(o.total, x.total); o.tries++; });
+      needTO(); const m = {}, sc = scopeOf_(db, ctx, null);
+      db.t('attempts').rows.filter((x) => !sc || sc[x.user_id]).forEach((x) => { const k = x.user_id + x.lesson_id, o = m[k] || (m[k] = { user_id: x.user_id, lesson_id: x.lesson_id, best: 0, total: 0, tries: 0 }); o.best = Math.max(o.best, x.score); o.total = Math.max(o.total, x.total); o.tries++; });
       return ok_(Object.keys(m).map((k) => m[k]));
     }
     case 'change_password': {
@@ -506,7 +544,7 @@ function rpcCall_(db, ctx, name, a) {
     case 'reset_password': {
       needT();
       const p = db.t('profiles').rows.find((r) => r.uid === a.p_uid);
-      must_(p && p.role === 'student', 'Ученик не найден');
+      must_(p && p.role !== 'teacher', 'Участник не найден');
       p.auth_id = null; p.salt = null; p.hash = null; p.pwv = (p.pwv || 0) + 1; db.t('profiles').touch(p);
       return ok_(null);
     }
@@ -566,12 +604,7 @@ function setup() {
   const ss = SpreadsheetApp.getActive(), props = PropertiesService.getScriptProperties();
   props.setProperty('SSID', ss.getId());
   if (!props.getProperty('SECRET')) props.setProperty('SECRET', uuid_() + uuid_() + uuid_());
-  Object.keys(SCHEMA).forEach((name) => {
-    const cols = SCHEMA[name].cols;
-    let sh = ss.getSheetByName(name) || ss.insertSheet(name);
-    sh.getRange(1, 1, 1, cols.length).setValues([cols.map((c) => c.n)]).setFontWeight('bold').setBackground('#e3f0ec');
-    sh.setFrozenRows(1);
-  });
+  ensureSchema_(ss);
   ['Sheet1', 'Лист1'].forEach((n) => { const s = ss.getSheetByName(n); if (s && s.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(s); });
   const db = new DB_(), profs = db.t('profiles');
   let t = profs.rows.find((r) => r.role === 'teacher');
@@ -580,10 +613,46 @@ function setup() {
     must_(NAME_RE.test(TEACHER_FIRST) && NAME_RE.test(TEACHER_LAST) && TEACHER_FIRST !== 'Имя', 'Впишите свои имя и фамилию в настройках вверху файла и запустите setup() снова');
     t = profs.insert({ uid: uuid_(), code: code, first_name: TEACHER_FIRST, last_name: TEACHER_LAST, role: 'teacher', pwv: 0, level: 'advanced', created_at: nowIso_() });
   }
+  migrate_(db);
   db.commit();
+  props.setProperty('SCHEMA_VER', SCHEMA_VER);
   const msg = 'Готово! Код учителя для регистрации: ' + t.code + ' (он же виден на листе profiles).';
   Logger.log(msg); ss.toast(msg, 'Лемалар', 30);
   return msg;
+}
+/** Создаёт недостающие листы и заголовки (старые данные не трогает: новые столбцы всегда в конце). */
+function ensureSchema_(ss) {
+  Object.keys(SCHEMA).forEach((name) => {
+    const cols = SCHEMA[name].cols;
+    const sh = ss.getSheetByName(name) || ss.insertSheet(name);
+    sh.getRange(1, 1, 1, cols.length).setValues([cols.map((c) => c.n)]).setFontWeight('bold').setBackground('#e3f0ec');
+    sh.setFrozenRows(1);
+  });
+}
+/** Первый класс «Астқыз», привязка прежних учеников и уроков к нему, наблюдательный аккаунт каждому классу. Безопасно запускать повторно. */
+function migrate_(db) {
+  const classes = db.t('classes'), profs = db.t('profiles'), lessons = db.t('lessons');
+  if (!classes.rows.length) classes.insert({ id: uuid_(), name: DEFAULT_CLASS, created_at: nowIso_() });
+  const def = classes.rows[0];
+  profs.rows.forEach((p) => { if (p.role === 'student' && !p.class_id) { p.class_id = def.id; profs.touch(p); } });
+  lessons.rows.forEach((l) => { if (!l.class_id) { l.class_id = def.id; lessons.touch(l); } });
+  classes.rows.forEach((c) => ensureObserver_(db, c));
+}
+function ensureObserver_(db, cls) {
+  const profs = db.t('profiles');
+  if (profs.rows.some((p) => p.role === 'observer' && p.class_id === cls.id)) return;
+  let code; do { code = randomCode_(8); } while (profs.rows.some((p) => p.code === code));
+  profs.insert({ uid: uuid_(), code: code, first_name: 'Наблюдатель', last_name: 'Класса', role: 'observer', pwv: 0, level: 'advanced', class_id: cls.id, created_at: nowIso_() });
+}
+function ensureMigrated_() {
+  if (prop_('SCHEMA_VER') === SCHEMA_VER || !prop_('SSID')) return;
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    if (prop_('SCHEMA_VER') === SCHEMA_VER) return;
+    ensureSchema_(SpreadsheetApp.openById(prop_('SSID')));
+    const db = new DB_(); migrate_(db); db.commit();
+    PropertiesService.getScriptProperties().setProperty('SCHEMA_VER', SCHEMA_VER);
+  } finally { lock.releaseLock(); }
 }
 /** Аварийно: забыли пароль учителя. Запустите эту функцию в редакторе, затем на сайте откройте «Регистрация», введите код учителя и задайте новый пароль. */
 function resetTeacherPassword() {
@@ -608,7 +677,7 @@ function refreshSummary() {
   const log = db.t('points_log').rows, prog = db.t('progress').rows, att = db.t('attempts').rows, hw = db.t('homework_answers').rows, at = db.t('attendance').rows;
   const pub = db.t('lessons').rows.filter((l) => l.published), pubIds = {}; pub.forEach((l) => { pubIds[l.id] = true; });
   const wsDate = weekStart_(today), off = Utilities.formatDate(new Date(), TZ, 'XXX'), thr = new Date(wsDate + 'T00:00:00' + off).toISOString();
-  const head = ['Фамилия', 'Имя', 'Команда', 'Уровень турецкого', 'Баллы всего', 'За неделю', 'Серия, дн.', 'Слов выучено', 'Средний тест, %', 'ДЗ сдано', 'Посещений', 'Последний вход'];
+  const head = ['Класс', 'Фамилия', 'Имя', 'Команда', 'Уровень турецкого', 'Баллы всего', 'За неделю', 'Серия, дн.', 'Слов выучено', 'Средний тест, %', 'ДЗ сдано', 'Посещений', 'Последний вход'];
   const rows = profs.sort((a, b) => String(a.last_name).localeCompare(String(b.last_name))).map((p) => {
     const mine = log.filter((r) => r.user_id === p.uid);
     const total = mine.reduce((s, r) => s + r.delta, 0), week = mine.filter((r) => r.reason !== 'weekly_top' && r.updated_at >= thr).reduce((s, r) => s + r.delta, 0);
@@ -616,7 +685,7 @@ function refreshSummary() {
     let d = days[today] ? today : addDays_(today, -1), streak = 0; while (days[d]) { streak++; d = addDays_(d, -1); }
     const best = {}; att.filter((x) => x.user_id === p.uid && pubIds[x.lesson_id]).forEach((x) => { const v = x.total ? x.score / x.total : 0; if (!(x.lesson_id in best) || v > best[x.lesson_id]) best[x.lesson_id] = v; });
     const bl = Object.keys(best), avg = bl.length ? Math.round(bl.reduce((s, k) => s + best[k], 0) / bl.length * 100) : '';
-    return [p.last_name, p.first_name, p.team || '', p.level || '', total, week, streak, prog.filter((x) => x.user_id === p.uid && x.learned).length, avg,
+    return [(db.t('classes').rows.find((c) => c.id === p.class_id) || {}).name || '', p.last_name, p.first_name, p.team || '', p.level || '', total, week, streak, prog.filter((x) => x.user_id === p.uid && x.learned).length, avg,
       hw.filter((h) => h.user_id === p.uid && pubIds[h.lesson_id]).length, at.filter((x) => x.user_id === p.uid && x.present).length, p.last_seen || ''];
   });
   let sh = ss.getSheetByName('Сводка') || ss.insertSheet('Сводка', 0);

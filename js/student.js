@@ -524,7 +524,7 @@ function meView() {
   const mentor = person(me.mentor), mentees = S.people.filter((p) => p.mentor === me.uid);
   return html`<h1>Мой профиль</h1>
   <div class="card"><div class="row"><span class="avatar" style="width:52px;height:52px;font-size:1.2rem">${initials(me)}</span>
-    <div class="grow"><b style="font-size:1.1rem">${me.first_name} ${me.last_name}</b><div class="small muted">${me.role === "teacher" ? "Учитель" : "Тьютор"}${me.team ? " · команда «" + me.team + "»" : ""}</div></div></div>
+    <div class="grow"><b style="font-size:1.1rem">${me.first_name} ${me.last_name}</b><div class="small muted">${me.role === "teacher" ? "Учитель" : "Тьютор"}${curClass() ? " · класс «" + curClass().name + "»" : ""}${me.team ? " · команда «" + me.team + "»" : ""}</div></div></div>
     ${me.role === "student" ? html`<p class="small mt">Уровень турецкого: <b>${levelOf(me).ru}</b> — баллы за выученные слова, тренировку и тесты ×${String(levelOf(me).mult).replace(".", ",")}. Уровень задаёт учитель.</p>` : ""}
     ${mentor ? html`<p class="small mt">Наставник: <b>${fullName(mentor)}</b></p>` : ""}
     ${mentees.length ? html`<p class="small">Вы наставник для: ${mentees.map((m) => fullName(m)).join(", ")}</p>` : ""}

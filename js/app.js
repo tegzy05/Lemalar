@@ -28,7 +28,7 @@ function authView() {
           <label>Код регистрации</label><input type="text" name="code" required autocapitalize="characters" placeholder="например, K7MQ4XTP" value="${auth.code}">
           <button class="btn block mt">Продолжить</button></form>`
       : html`<form data-form="reg2">
-          <div class="card gold flat center" style="margin-bottom:0"><div class="small muted">Вы регистрируетесь как</div><h2 style="margin:4px 0">${auth.info.first_name} ${auth.info.last_name}</h2><div class="small">Это вы? Если нет — вернитесь и проверьте код.</div></div>
+          <div class="card gold flat center" style="margin-bottom:0"><div class="small muted">Вы регистрируетесь как</div><h2 style="margin:4px 0">${auth.info.role === "observer" ? "Наблюдатель класса «" + (auth.info.class_name || "") + "»" : auth.info.first_name + " " + auth.info.last_name}</h2><div class="small">${auth.info.role === "observer" ? "Только просмотр успехов класса." : "Это вы? Если нет — вернитесь и проверьте код."}</div></div>
           <label>Придумайте пароль (минимум 6 символов)</label><input type="password" name="p1" required minlength="6" autocomplete="new-password">
           <label>Повторите пароль</label><input type="password" name="p2" required minlength="6" autocomplete="new-password">
           <button class="btn block mt">Создать аккаунт</button>
@@ -72,10 +72,11 @@ FORM.reg2 = async (f, fd) => {
   if (fd.get("p1") !== fd.get("p2")) throw new Error("Пароли не совпадают");
   await doRegister(auth.code, fd.get("p1")); toast("Добро пожаловать!", "ok"); go();
 };
-function go() { location.hash = isTeacher() ? "#/t/overview" : "#/home"; render(); }
+function go() { location.hash = isTeacher() ? "#/t/overview" : isObserver() ? "#/o/overview" : "#/home"; render(); }
 
 // ---------- каркас ----------
 function navItems() {
+  if (isObserver()) return [["#/o/overview", "👁", "Класс", ["o"]], ["#/board", "🏆", "Рейтинг", ["board"]], ["#/me", "👤", "Я", ["me"]]];
   return isTeacher()
     ? [["#/t/overview", "⚙️", "Панель", ["t"]], ["#/lessons", "📖", "Уроки", ["lessons", "lesson", "learn", "test"]], ["#/board", "🏆", "Рейтинг", ["board"]], ["#/me", "👤", "Я", ["me"]]]
     : [["#/home", "🏠", "Главная", ["home"]], ["#/lessons", "📖", "Уроки", ["lessons", "lesson", "learn", "test"]], ["#/board", "🏆", "Рейтинг", ["board"]], ["#/me", "✍️", "Дневник", ["me"]]];
@@ -87,7 +88,8 @@ function chrome(r) {
   const bn = document.getElementById("demo-banner"); bn.classList.toggle("hidden", !S.preview);
   if (S.preview) bn.innerHTML = `👁 Вы смотрите глазами: <b>${esc(S.preview.first_name + " " + S.preview.last_name)}</b> — только просмотр, ничего не сохраняется. <a href="#" data-act="exitPreview">Выйти в аккаунт учителя</a>`;
   if (!on) return;
-  document.getElementById("who").textContent = `${S.me.first_name} ${S.me.last_name}${isTeacher() ? " · учитель" : ""}`;
+  document.getElementById("who").textContent = `${S.me.first_name} ${S.me.last_name}${isTeacher() ? " · учитель" : isObserver() ? " · наблюдатель" : ""}`;
+  document.getElementById("pts-chip").classList.toggle("hidden", isObserver());
   updateChip();
   const cur = r.name === "learn" && r.a === "daily" ? "home" : r.name;
   document.getElementById("nav-inner").innerHTML = navItems().map(([h, ic, n, names]) => `<a href="${h}" class="${names.includes(cur) ? "on" : ""}"><span class="ic">${ic}</span>${n}</a>`).join("");
@@ -99,8 +101,10 @@ function render() {
   stopTimer();
   if (sess && r.name !== "learn") { const s = sess; sess = null; flushSession(s); }
   if (!S.me) { chrome(r); root.innerHTML = authView().s; return; }
+  if (isObserver() && !["o", "board", "me"].includes(r.name)) { return void (location.hash = "#/o/overview"); }
   if (!r.name || (r.name === "home" && isTeacher())) { return void (location.hash = isTeacher() ? "#/t/overview" : "#/home"); }
-  if (r.name === "t" && !isTeacher()) { return void (location.hash = "#/home"); }
+  if (r.name === "t" && !isTeacher()) { return void (location.hash = isObserver() ? "#/o/overview" : "#/home"); }
+  if (r.name === "o" && !isObserver()) { return void (location.hash = isTeacher() ? "#/t/overview" : "#/home"); }
   chrome(r);
   let v;
   try {
@@ -111,15 +115,16 @@ function render() {
       case "learn": v = learnView(r.a, r.b || "mix"); break;
       case "test": v = testView(r.a); break;
       case "board": v = boardView(r.a || "week"); break;
-      case "me": v = meView(); break;
+      case "me": v = isObserver() ? observerMe() : meView(); break;
+      case "o": v = observerView(r.a || "overview", r.b); break;
       case "t": v = teacherView(r.a || "overview", r.b); break;
       default: v = homeView();
     }
   } catch (e) { console.error(e); v = html`<div class="card"><h3>Ошибка отображения</h3><p class="small">${e.message}</p><a href="#/home">На главную</a></div>`; }
+  if (isTeacher() && ["lessons", "board"].includes(r.name)) v = html`${classBar()}${v}`;
   root.innerHTML = v.s;
   const h = location.hash;
   if (h !== lastHash) { window.scrollTo(0, 0); lastHash = h; }
-  if (r.name === "t" && r.a === "points") loadPointsLog();
   if (r.name === "test" && tst && tst.started && !tst.done) startTimer();
 }
 function startTimer() {

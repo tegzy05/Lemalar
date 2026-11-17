@@ -1,14 +1,14 @@
 // ============================================================
 //  Панель учителя
 // ============================================================
-const TTABS = [["overview", "Обзор"], ["lessons", "Уроки"], ["cards", "Карточки"], ["mod", "Проверка"], ["people", "Группа"], ["att", "Посещаемость"], ["points", "Баллы"]];
+const TTABS = [["overview", "Обзор"], ["lessons", "Уроки"], ["cards", "Карточки"], ["mod", "Проверка"], ["people", "Группа"], ["att", "Посещаемость"], ["points", "Баллы"], ["classes", "Классы"]];
 let tLesson = null;           // выбранный урок во вкладках «Карточки» / «Посещаемость»
 let editLessonId = null, editCardId = null;
 
 function teacherView(tab = "overview", arg) {
   const pend = S.cards.filter((c) => c.status === "pending").length + S.questions.filter((x) => x.status === "pending").length;
-  const fn = { overview: tOverview, lessons: tLessons, cards: tCards, mod: tMod, people: tPeople, att: tAtt, points: tPoints, student: tStudent }[tab] || tOverview;
-  return html`<h1>Панель учителя</h1>
+  const fn = { overview: tOverview, lessons: tLessons, cards: tCards, mod: tMod, people: tPeople, att: tAtt, points: tPoints, student: tStudent, classes: tClasses }[tab] || tOverview;
+  return html`<h1>Панель учителя</h1>${classBar()}
   <div class="tabs">${TTABS.map(([k, n]) => html`<a href="#/t/${k}" class="${k === tab ? "on" : ""}">${n}${k === "mod" && pend ? html` <span class="badge bad">${pend}</span>` : ""}</a>`)}</div>
   ${fn(arg)}`;
 }
@@ -46,13 +46,13 @@ function tOverview() {
   return html`
   <div class="card"><div class="row between"><h3 style="margin:0">Группа: ${reg} из ${rows.length} в системе</h3><button class="btn sm soft" data-act="csv">⬇ CSV</button></div>
     <div class="tbl-wrap mt"><table><thead><tr><th>Ученик</th><th class="num">Баллы</th><th class="num">Нед.</th><th class="num">🔥</th><th class="num">Слова</th><th class="num">Тесты</th><th class="num">ДЗ</th><th class="num">Посещ.</th><th>Был(а)</th></tr></thead>
-    <tbody>${rows.map((r) => html`<tr><td><a href="#/t/student/${r.p.uid}">${fullName(r.p)}</a>${r.p.team ? html` <span class="badge">${r.p.team}</span>` : ""} <span class="badge grey">${levelOf(r.p).ru}</span>${r.p.registered ? "" : html` <span class="badge grey">не вошёл</span>`}</td>
+    <tbody>${rows.map((r) => html`<tr><td><a href="${studentHref(r.p.uid)}">${fullName(r.p)}</a>${r.p.team ? html` <span class="badge">${r.p.team}</span>` : ""} <span class="badge grey">${levelOf(r.p).ru}</span>${r.p.registered ? "" : html` <span class="badge grey">не вошёл</span>`}</td>
       <td class="num"><b>${r.b.total}</b></td><td class="num">${r.b.week}</td><td class="num">${r.streak}</td>
       <td class="num">${r.pr.learned}/${r.totalCards}${r.acc != null ? html` <span class="muted tiny">(${r.acc}%)</span>` : ""}</td>
       <td class="num">${r.avg != null ? r.avg + "%" : "—"}</td><td class="num">${r.hwDone}/${r.hwTotal}</td><td class="num">${r.att}/${S.lessons.filter((l) => l.published).length}</td>
       <td class="${r.idle >= 5 ? "flame" : "muted"}">${r.p.last_seen ? (r.idle === 0 ? "сегодня" : r.idle + " дн. назад") : "—"}</td></tr>`)}</tbody></table></div></div>
   ${risk.length ? html`<div class="card"><h3>Давно не заходили</h3><p class="small muted">Стоит написать лично:</p>${risk.map((r) => html`<span class="badge bad" style="margin:2px">${fullName(r.p)} · ${r.idle === Infinity ? "не заходил" : r.idle + " дн."}</span>`)}</div>` : ""}
-  ${waiting.length ? html`<div class="card"><h3>Ещё не зарегистрировались (${waiting.length})</h3><p class="small muted">Код для входа — во вкладке «Группа».</p>${waiting.map((r) => html`<span class="badge grey" style="margin:2px">${fullName(r.p)}</span>`)}</div>` : ""}
+  ${waiting.length ? html`<div class="card"><h3>Ещё не зарегистрировались (${waiting.length})</h3>${isTeacher() ? html`<p class="small muted">Код для входа — во вкладке «Группа».</p>` : ""}${waiting.map((r) => html`<span class="badge grey" style="margin:2px">${fullName(r.p)}</span>`)}</div>` : ""}
   <div class="card"><h3>Трудные слова</h3><p class="small muted">Доля ошибок по всей группе — разберите эти слова на уроке ещё раз.</p>
     ${hard.length ? html`<div class="list">${hard.map((x) => html`<div class="item row between"><div><b dir="auto">${x.c.term}</b> — ${x.c.translation}</div><span class="badge bad">${Math.round(x.err * 100)}% ошибок</span></div>`)}</div>` : html`<p class="muted">Данных пока мало.</p>`}</div>`;
 }
@@ -69,13 +69,14 @@ function tStudent(uid) {
   const r = studentRows().find((x) => x.p.uid === uid);
   const tests = S.tTests.filter((t) => t.user_id === uid);
   const sd = window._tDiary?.[uid], sh = window._tHw?.[uid];
-  if (!sd) loadStudentDetail(uid);
-  return html`<a href="#/t/overview" class="small">← Обзор</a><div class="card mt"><h2>${fullName(p)}</h2>
+  if (isTeacher() && !sd) loadStudentDetail(uid);
+  return html`<a href="${isTeacher() ? "#/t/overview" : "#/o/overview"}" class="small">← Обзор</a><div class="card mt"><h2>${fullName(p)}</h2>
     <div class="row wrap"><span class="chip">${r.b.total} ★</span><span class="badge">${r.b.week} за неделю</span><span class="badge gold">🔥 ${r.streak}</span>${p.team ? html`<span class="badge">${p.team}</span>` : ""}</div>
     <p class="small muted mt">Выучено слов: ${r.pr.learned} · точность ответов: ${r.acc ?? "—"}% · последний вход: ${p.last_seen ? fmtDateTime(p.last_seen) : "—"}</p></div>
   <div class="card"><h3>Тесты</h3>${tests.length ? html`<div class="list">${tests.map((t) => html`<div class="item row between"><span>${lessonById(t.lesson_id) ? "Урок " + lessonById(t.lesson_id).num : "—"} (попыток: ${t.tries})</span><b>${t.best}/${t.total}</b></div>`)}</div>` : html`<p class="muted">Нет попыток.</p>`}</div>
-  <div class="card"><h3>Домашние задания</h3>${sh ? (sh.length ? html`<div class="list">${sh.map((h) => html`<div class="item"><div class="small muted">Урок ${lessonById(h.lesson_id)?.num ?? "?"}: ${lessonById(h.lesson_id)?.homework || ""}</div><div style="white-space:pre-wrap">${h.answer}</div></div>`)}</div>` : html`<p class="muted">Пока не сдавал(а).</p>`) : html`<p class="muted">Загрузка…</p>`}</div>
-  <div class="card"><h3>Дневник размышлений</h3>${sd ? (sd.length ? html`<div class="list">${sd.map((d) => html`<div class="item"><div class="tiny muted">${fmtDate(d.day)}</div><div style="white-space:pre-wrap">${d.body}</div></div>`)}</div>` : html`<p class="muted">Записей нет.</p>`) : html`<p class="muted">Загрузка…</p>`}</div>`;
+  ${isTeacher() ? html`  <div class="card"><h3>Домашние задания</h3>${sh ? (sh.length ? html`<div class="list">${sh.map((h) => html`<div class="item"><div class="small muted">Урок ${lessonById(h.lesson_id)?.num ?? "?"}: ${lessonById(h.lesson_id)?.homework || ""}</div><div style="white-space:pre-wrap">${h.answer}</div></div>`)}</div>` : html`<p class="muted">Пока не сдавал(а).</p>`) : html`<p class="muted">Загрузка…</p>`}</div>
+  <div class="card"><h3>Дневник размышлений</h3>${sd ? (sd.length ? html`<div class="list">${sd.map((d) => html`<div class="item"><div class="tiny muted">${fmtDate(d.day)}</div><div style="white-space:pre-wrap">${d.body}</div></div>`)}</div>` : html`<p class="muted">Записей нет.</p>`) : html`<p class="muted">Загрузка…</p>`}</div>` : ""}
+  ${historyCard(uid)}`;
 }
 async function loadStudentDetail(uid) {
   window._tDiary ||= {}; window._tHw ||= {};
@@ -131,7 +132,7 @@ FORM.lesson = async (f, fd) => {
   const id = fd.get("id");
   const row = { num: Number(fd.get("num")), title: fd.get("title").trim(), lesson_date: fd.get("lesson_date") || null, summary: fd.get("summary").trim() || null,
     slides_url: fd.get("slides_url").trim() || null, discussion_topic: fd.get("discussion_topic").trim() || null, homework: fd.get("homework").trim() || null,
-    homework_due: fd.get("homework_due") || null, test_minutes: Number(fd.get("test_minutes")), test_attempts: Number(fd.get("test_attempts")) };
+    homework_due: fd.get("homework_due") || null, class_id: S.classId, test_minutes: Number(fd.get("test_minutes")), test_attempts: Number(fd.get("test_attempts")) };
   const file = fd.get("slides_file");
   if (file && file.size) {
     if (file.size > 10 * 1024 * 1024) throw new Error("Файл больше 10 МБ — загрузите его на Google Диск и вставьте ссылку");
@@ -238,14 +239,15 @@ function tPeople() {
     <p class="small muted">Уровень задаёт множитель баллов за учёбу: начинающий ×2, средний ×1,5, продвинутый ×1. Продвинутый наставник получает +25% от баллов своего подопечного-новичка за учёбу (до 10 в день).</p>
     <form data-form="roster"><textarea name="text" required style="min-height:150px" placeholder="Айгерим Сейтова, Бирлик, продвинутый&#10;Данияр Ахметов, Нур, начинающий"></textarea><button class="btn block mt">Добавить в группу</button></form></div>
   ${lastAdded ? html`<div class="card gold"><b>Только что добавлены — разошлите коды:</b><pre style="white-space:pre-wrap;font:inherit;margin:8px 0">${lastAdded}</pre><button class="btn sm" data-act="copyAdded">Скопировать</button></div>` : ""}
-  <div class="card"><div class="row between"><h3 style="margin:0">Группа (${st.length})</h3><button class="btn sm soft" data-act="copyAll">Скопировать все коды</button></div>
+  <div class="card"><div class="row between"><h3 style="margin:0">Класс «${curClass()?.name || ""}»: ${st.length}</h3><button class="btn sm soft" data-act="copyAll">Скопировать все коды</button></div>
     <p class="small muted">Ученик заходит на сайт → «Регистрация» → вводит свой код и придумывает пароль. Имя берётся из этого списка.</p>
-    <div class="tbl-wrap"><table><thead><tr><th>Имя Фамилия</th><th>Код</th><th>Турецкий</th><th>Команда</th><th>Наставник</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap"><table><thead><tr><th>Имя Фамилия</th><th>Код</th><th>Турецкий</th><th>Команда</th><th>Наставник</th><th>Класс</th><th></th></tr></thead><tbody>
     ${list.map((p) => html`<tr><td>${fullName(p)} ${p.role === "teacher" ? html`<span class="badge gold">учитель</span>` : p.registered ? html`<span class="badge ok">в системе</span>` : html`<span class="badge grey">ждёт</span>`}</td>
       <td><code>${codes?.[p.uid] || "…"}</code></td>
       <td><select style="padding:6px 8px;width:140px" data-change="setLevel" data-id="${p.uid}">${Object.entries(LEVEL_INFO).map(([k, v]) => html`<option value="${k}" ${levelOf(p) === v ? "selected" : ""}>${v.ru} ×${String(v.mult).replace(".", ",")}</option>`)}</select></td>
       <td><input type="text" style="width:110px;padding:6px 8px" value="${p.team || ""}" data-change="setTeam" data-id="${p.uid}" placeholder="—"></td>
       <td>${p.role === "student" ? html`<select style="padding:6px 8px;width:150px" data-change="setMentor" data-id="${p.uid}"><option value="">—</option>${st.filter((x) => x.uid !== p.uid && levelOf(x).rank > levelOf(p).rank).map((x) => html`<option value="${x.uid}" ${p.mentor === x.uid ? "selected" : ""}>${fullName(x)}</option>`)}</select>` : ""}</td>
+      <td>${p.role === "student" ? html`<select style="padding:6px 8px;width:120px" data-change="setClass" data-id="${p.uid}">${S.classes.map((c) => html`<option value="${c.id}" ${p.class_id === c.id ? "selected" : ""}>${c.name}</option>`)}</select>` : ""}</td>
       <td style="white-space:nowrap">${p.role === "student" ? html`${p.registered ? html`<button class="btn sm soft" data-act="resetPw" data-id="${p.uid}" title="Сбросить пароль">🔑</button> ` : ""}<button class="btn sm ghost" data-act="delPerson" data-id="${p.uid}">✕</button>` : ""}</td></tr>`)}</tbody></table></div>
     <p class="hint">🔑 — сброс пароля: прогресс сохранится, ученик заново зарегистрируется по тому же коду и придумает новый пароль.</p></div>`;
 }
@@ -262,7 +264,7 @@ FORM.roster = async (f, fd) => {
     if (level === null) { bad.push(`${i + 1}: уровень «${lvl}» — напишите начинающий, средний или продвинутый`); return; }
     const w = namePart.split(/\s+/);
     if (w.length < 2 || !w.every((x) => NAME_RE.test(x))) { bad.push(`${i + 1}: «${line}»`); return; }
-    rows.push({ code: genCode(), first_name: w[0], last_name: w.slice(1).join(" "), role: "student", team: team || null, level, _mentor: mentorName || "" });
+    rows.push({ code: genCode(), first_name: w[0], last_name: w.slice(1).join(" "), role: "student", class_id: S.classId, team: team || null, level, _mentor: mentorName || "" });
   });
   if (bad.length) throw new Error(`Нужны имя и фамилия (только буквы). Проверьте строки — ${bad.join("; ")}`);
   const wantMentor = rows.filter((r) => r._mentor);
@@ -283,6 +285,13 @@ FORM.roster = async (f, fd) => {
 };
 CHG.setTeam = async (el) => { await q(S.sb.from("profiles").update({ team: el.value.trim() || null }).eq("uid", el.dataset.id)); person(el.dataset.id).team = el.value.trim() || null; toast("Команда сохранена", "ok"); };
 CHG.setLevel = async (el) => { await q(S.sb.from("profiles").update({ level: el.value }).eq("uid", el.dataset.id)); person(el.dataset.id).level = el.value; toast("Уровень сохранён (действует на новые баллы)", "ok"); };
+CHG.setClass = async (el) => {
+  const p = person(el.dataset.id), c = classById(el.value);
+  if (!confirm(`Перевести ${fullName(p)} в класс «${c.name}»? Команда и наставник сбросятся; баллы и прогресс сохранятся.`)) { render(); return; }
+  await q(S.sb.from("profiles").update({ class_id: c.id, team: null, mentor: null }).eq("uid", p.uid));
+  S.people.forEach((x) => { if (x.mentor === p.uid) x.mentor = null; });
+  await loadAll(); resetHist(); toast("Переведён(а) в «" + c.name + "»", "ok"); render();
+};
 CHG.setMentor = async (el) => { await q(S.sb.from("profiles").update({ mentor: el.value || null }).eq("uid", el.dataset.id)); person(el.dataset.id).mentor = el.value || null; toast("Наставник назначен", "ok"); };
 ACT.delPerson = async (el) => {
   const p = person(el.dataset.id);
@@ -317,7 +326,7 @@ FORM.att = async (f, fd) => {
     const i = S.att.findIndex((x) => x.lesson_id === lid && x.user_id === r.user_id); if (i >= 0) S.att[i] = r; else S.att.push(r);
     await q(S.sb.rpc("teacher_award", { p_uid: r.user_id, p_reason: "attendance", p_ref: lid, p_delta: r.present ? 10 : 0, p_note: "Посещение урока" }));
   }
-  await refreshBoard(); toast("Посещаемость сохранена", "ok"); render();
+  await refreshBoard(); resetHist(); toast("Посещаемость сохранена", "ok"); render();
 };
 
 // ---------- БАЛЛЫ ----------
@@ -334,25 +343,16 @@ function tPoints() {
     <label>За что</label><select name="reason">${AWARD_REASONS.map(([k, n]) => html`<option value="${k}">${n}</option>`)}</select>
     <div class="row"><div class="grow"><label>Баллы</label><input type="number" name="delta" value="5" min="1" max="100" required></div></div>
     <label>Комментарий (увидит только учитель)</label><input type="text" name="note"><button class="btn block mt">Начислить</button></form></div>
-  <div class="card"><h3>Последние начисления от учителя</h3><div id="plog" class="small muted">Загрузка…</div></div>`;
+  ${historyCard()}`;
 }
 FORM.award = async (f, fd) => {
   const reason = fd.get("reason"), d = Number(fd.get("delta")) * (reason === "penalty" ? -1 : 1);
   await q(S.sb.rpc("teacher_award", { p_uid: fd.get("uid"), p_reason: reason, p_ref: null, p_delta: d, p_note: fd.get("note").trim() || null }));
-  await refreshBoard(); toast("Начислено", "ok"); render();
+  await refreshBoard(); resetHist(); toast("Начислено", "ok"); render();
 };
 ACT.closeWeek = async () => {
   const ws = weekStart(), top = rankRows("week").filter((r) => r.rank <= 3 && r.pts > 0);
   if (!confirm(`Начислить бонус: ${top.map((r) => fullName(r.p)).join(", ")}?`)) return;
   for (const r of top) await q(S.sb.rpc("teacher_award", { p_uid: r.p.uid, p_reason: "weekly_top", p_ref: "week:" + ws, p_delta: [15, 10, 5][r.rank - 1], p_note: `Топ-${r.rank} недели ${ws}` }));
-  await refreshBoard(); toast("Бонус начислен", "ok"); render();
+  await refreshBoard(); resetHist(); toast("Бонус начислен", "ok"); render();
 };
-async function loadPointsLog() {
-  const el = document.getElementById("plog"); if (!el) return;
-  try {
-    const rows = await q(S.sb.from("points_log").select("*").neq("reason", "practice").order("updated_at", { ascending: false }).limit(25));
-    const t = rows.filter((r) => ["mentor", "mentor_share", "discussion", "bonus", "penalty", "weekly_top", "suggestion", "attendance"].includes(r.reason)).slice(0, 15);
-    const names = { mentor: "наставничество", mentor_share: "доля наставника", discussion: "обсуждение", bonus: "поощрение", penalty: "корректировка", weekly_top: "топ недели", suggestion: "одобрено предложение", attendance: "посещение" };
-    el.innerHTML = t.length ? t.map((r) => `<div style="padding:6px 0;border-top:1px solid var(--line)">${esc(fullName(person(r.user_id)))} · <b>${r.delta > 0 ? "+" : ""}${r.delta}</b> · ${esc(names[r.reason] || r.reason)}${r.note ? " · " + esc(r.note) : ""}</div>`).join("") : "Пока нет.";
-  } catch (e) { el.textContent = errMsg(e); }
-}
