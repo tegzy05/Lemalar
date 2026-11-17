@@ -638,6 +638,22 @@ function migrate_(db) {
   lessons.rows.forEach((l) => { if (!l.class_id) { l.class_id = def.id; lessons.touch(l); } });
   classes.rows.forEach((c) => ensureObserver_(db, c));
 }
+/** Диагностика и починка после обновления: покажет, сколько данных на месте, и привяжет «потерянных» учеников и уроки к классу. Ничего не удаляет. */
+function repairClasses() {
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('SSID')) props.setProperty('SSID', SpreadsheetApp.getActive().getId());
+  ensureSchema_(SpreadsheetApp.getActive());
+  const db = new DB_();
+  migrate_(db); db.commit();
+  props.setProperty('SCHEMA_VER', SCHEMA_VER);
+  const db2 = new DB_(), out = [];
+  db2.t('classes').rows.forEach((c) => {
+    out.push('Класс «' + c.name + '»: учеников ' + db2.t('profiles').rows.filter((p) => p.role === 'student' && p.class_id === c.id).length + ', уроков ' + db2.t('lessons').rows.filter((l) => l.class_id === c.id).length);
+  });
+  out.push('Всего учеников в таблице: ' + db2.t('profiles').rows.filter((p) => p.role === 'student').length + ', без класса: ' + db2.t('profiles').rows.filter((p) => p.role === 'student' && !p.class_id).length);
+  out.push('Карточек: ' + db2.t('cards').rows.length + ', записей прогресса: ' + db2.t('progress').rows.length + ', записей в журнале баллов: ' + db2.t('points_log').rows.length);
+  const msg = out.join('\n'); Logger.log(msg); return msg;
+}
 function ensureObserver_(db, cls) {
   const profs = db.t('profiles');
   if (profs.rows.some((p) => p.role === 'observer' && p.class_id === cls.id)) return;

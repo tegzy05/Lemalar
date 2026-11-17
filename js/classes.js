@@ -21,6 +21,13 @@ function tClasses() {
   return html`<div class="card"><h3>Новый класс</h3>
     <form data-form="newClass"><label>Название класса</label><input type="text" name="name" required maxlength="60" placeholder="например, Бекзат"><button class="btn block mt">Создать класс</button></form>
     <p class="hint">В каждом классе свои ученики, уроки, карточки, рейтинг и баллы. Для нового класса сразу создаётся наблюдательный аккаунт (только просмотр).</p></div>
+  ${(() => {
+    const lost = S.allPeople.filter((p) => p.role === "student" && !p.class_id), lostL = S.allLessons.filter((l) => !l.class_id);
+    return lost.length || lostL.length ? html`<div class="card gold"><h3>Без класса: ${lost.length} уч., ${lostL.length} ур.</h3>
+      <p class="small">Эти данные не потеряны, просто не привязаны к классу и поэтому не видны. Выберите класс и привяжите.</p>
+      <form data-form="adoptLost"><select name="cid">${S.classes.map((c) => html`<option value="${c.id}">${c.name}</option>`)}</select><button class="btn block mt">Привязать к выбранному классу</button></form>
+      <div class="small muted mt">${lost.map(fullName).join(", ")}</div></div>` : "";
+  })()}
   ${S.classes.map((c) => {
     const st = S.allPeople.filter((p) => p.role === "student" && p.class_id === c.id), obs = S.allPeople.find((p) => p.role === "observer" && p.class_id === c.id);
     const lessons = S.allLessons.filter((l) => l.class_id === c.id), code = obs ? window._tCodes?.[obs.uid] : null;
@@ -35,6 +42,12 @@ function tClasses() {
         <p class="hint">Наблюдатель заходит на сайт: «Регистрация» → код → пароль. Ссылка: ${base}</p></div>` : ""}</div>`;
   })}`;
 }
+FORM.adoptLost = async (f, fd) => {
+  const cid = fd.get("cid");
+  for (const p of S.allPeople.filter((x) => x.role === "student" && !x.class_id)) await q(S.sb.from("profiles").update({ class_id: cid }).eq("uid", p.uid));
+  for (const l of S.allLessons.filter((x) => !x.class_id)) await q(S.sb.from("lessons").update({ class_id: cid }).eq("id", l.id));
+  await switchClass(cid); toast("Привязано", "ok"); render();
+};
 FORM.newClass = async (f, fd) => {
   const row = await q(S.sb.from("classes").insert({ name: fd.get("name").trim() }).select().single());
   window._tCodes = null; await switchClass(row.id); toast("Класс создан", "ok"); render();
